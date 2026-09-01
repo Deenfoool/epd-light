@@ -6,6 +6,8 @@
   "scripts": {
     "preflight": "node scripts/preflight.mjs",
     "gateway:test": "node scripts/test-gateway.mjs",
+    "kontur:provider:test": "node scripts/test-kontur-provider.mjs",
+    "kontur:userdata:test": "node scripts/test-kontur-userdata.mjs",
     "fns:schema:check": "node scripts/check-fns-schema.mjs",
     "fns:schema:save": "node scripts/check-fns-schema.mjs --save",
     "predev": "node scripts/assemble-app.mjs",
