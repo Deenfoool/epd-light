@@ -1,5 +1,6 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { konturPublicCapabilities } from './providers/kontur.mjs'
 
 const port = Number(process.env.PORT || 8787)
 const provider = process.env.EPD_OPERATOR_PROVIDER || 'none'
@@ -75,8 +76,19 @@ function preflightCandidate(input) {
   if (!input?.driver?.fullName) errors.push('не указан водитель')
   if (!input?.readiness?.candidate) warnings.push('frontend operator-readiness содержит незаполненные поля')
   warnings.push('server preflight не является XSD-валидацией ФНС')
-  warnings.push('provider adapter не подключён и внешние API не вызываются')
+  warnings.push('provider adapter не подключён к gateway и внешние API не вызываются')
   return { ok: errors.length === 0, errors, warnings }
+}
+
+function providerCapabilities() {
+  if (provider === 'kontur') return konturPublicCapabilities()
+  return {
+    provider,
+    adapterAvailable: false,
+    credentialsConfigured: false,
+    generateTitleWiredToGateway: false,
+    sendWiredToGateway: false,
+  }
 }
 
 const server = createServer(async (req, res) => {
@@ -113,7 +125,8 @@ const server = createServer(async (req, res) => {
       xsdValidationEnabled: false,
       authRequiredForFutureSend: true,
       supportedCandidate: 'epd-light/operator-candidate-v1',
-      message: 'Gateway работает, но внешняя отправка намеренно отключена до реализации и проверки provider adapter.',
+      providerAdapter: providerCapabilities(),
+      message: 'Gateway работает, но внешняя отправка намеренно отключена до проверки provider adapter, UserDataXsd mapping, подписания и операторского тестового контура.',
       requestId,
     }, requestId, origin)
     return
@@ -136,7 +149,7 @@ const server = createServer(async (req, res) => {
       error: 'operator_send_disabled',
       provider,
       mode: operatorMode,
-      message: 'Юридически значимая отправка заблокирована: provider adapter и операторский доступ ещё не подключены.',
+      message: 'Юридически значимая отправка заблокирована: provider adapter не подключён к send, а подписание и операторский тестовый контур не настроены.',
       requestId,
     }, requestId, origin)
     return
