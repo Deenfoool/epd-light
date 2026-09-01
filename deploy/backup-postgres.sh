@@ -61,15 +61,17 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-echo "Creating encrypted PostgreSQL backup: $FINAL_FILE"
+# Pass secret DB URL to Docker by inherited environment name only, never NAME=value in argv.
+export EPD_DATABASE_URL="$DB_URL"
+export EPD_DUMP_TMP_NAME="$DUMP_TMP_NAME"
 
-# The database URL exists only in the temporary pg client container environment.
+echo "Creating encrypted PostgreSQL backup: $FINAL_FILE"
 docker run --rm \
-  -e EPD_DATABASE_URL="$DB_URL" \
-  -e EPD_DUMP_TMP_NAME="$DUMP_TMP_NAME" \
+  -e EPD_DATABASE_URL \
+  -e EPD_DUMP_TMP_NAME \
   -v "$BACKUP_DIR:/backup" \
   "$POSTGRES_IMAGE" \
-  sh -eu -c 'pg_dump --format=custom --compress=6 --no-owner --no-acl --file="/backup/$EPD_DUMP_TMP_NAME" "$EPD_DATABASE_URL"'
+  sh -eu -c 'PGDATABASE="$EPD_DATABASE_URL" pg_dump --format=custom --compress=6 --no-owner --no-acl --file="/backup/$EPD_DUMP_TMP_NAME"'
 
 mv "$BACKUP_DIR/$DUMP_TMP_NAME" "$PLAIN_TMP"
 if [ ! -s "$PLAIN_TMP" ]; then
@@ -78,13 +80,11 @@ if [ ! -s "$PLAIN_TMP" ]; then
 fi
 chmod 600 "$PLAIN_TMP" 2>/dev/null || true
 
-# Check the PostgreSQL custom archive before encrypting it.
 docker run --rm \
   -v "$BACKUP_DIR:/backup:ro" \
   "$POSTGRES_IMAGE" \
   pg_restore --list "/backup/$(basename "$PLAIN_TMP")" >/dev/null
 
-# Store only encrypted backup material at rest. The passphrase is read from env and is never printed.
 EPD_BACKUP_PASSPHRASE="$PASSPHRASE" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -md sha256 \
   -pass env:EPD_BACKUP_PASSPHRASE \
   -in "$PLAIN_TMP" \
@@ -119,12 +119,10 @@ chmod 600 "$CHECKSUM_FILE" 2>/dev/null || true
 } > "$META_FILE"
 chmod 600 "$META_FILE" 2>/dev/null || true
 
-# Verify encrypted artifact end-to-end before announcing success.
 EPD_BACKUP_PASSPHRASE="$PASSPHRASE" sh "$ROOT_DIR/deploy/verify-postgres-backup.sh" "$FINAL_FILE" >/dev/null
 
 echo "Encrypted backup verified."
 
-# Remove only old EPD Light encrypted backup triplets from this dedicated directory.
 find "$BACKUP_DIR" -type f \
   \( -name 'epd-light-*.dump.enc' -o -name 'epd-light-*.dump.enc.sha256' -o -name 'epd-light-*.dump.enc.meta' \) \
   -mtime "+$RETENTION_DAYS" -delete 2>/dev/null || true
