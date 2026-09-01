@@ -35,7 +35,9 @@ const caps = konturPublicCapabilities({ boxId: 'box', accessToken: 'secret' })
 assert(caps.credentialsConfigured === true, 'configured capability must be detected')
 assert(caps.userDataPreviewWiredToGateway === true, 'local UserData preview should be gateway-wired')
 assert(caps.userDataPreviewExternalCall === false, 'UserData preview must remain local-only')
+assert(caps.generateTitleBoundaryReady === true, 'server-only GenerateTitle boundary should be ready')
 assert(caps.generateTitleWiredToGateway === false, 'GenerateTitleXml must not be gateway-wired')
+assert(caps.postMessageImplemented === false, 'PostMessage must remain unimplemented')
 assert(caps.sendWiredToGateway === false, 'send must not be gateway-wired')
 assert(!JSON.stringify(caps).includes('secret'), 'public capabilities must never expose token')
 
@@ -77,4 +79,4 @@ try {
 }
 assert(missingTokenFailed, 'missing access token must fail before network request')
 
-console.log('Kontur provider offline test OK: contract, URLs, Bearer auth, local preview and fail-closed external wiring verified')
+console.log('Kontur provider offline test OK: contract, URLs, Bearer auth, local preview, private GenerateTitle boundary and fail-closed sending verified')
