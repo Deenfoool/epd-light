@@ -81,6 +81,28 @@ export async function getKonturDocumentTypes({ boxId, accessToken, fetchImpl = f
   return response.json()
 }
 
+/** Lists LogisticsWaybill function/version/title combinations without choosing one automatically. */
+export function listKonturLogisticsWaybillContracts(response) {
+  const documentTypes = Array.isArray(response?.DocumentTypes) ? response.DocumentTypes : []
+  const documentType = documentTypes.find((x) => x?.Name === KONTUR_T1_CONTRACT.documentTypeNamedId)
+  const functions = Array.isArray(documentType?.Functions) ? documentType.Functions : []
+  return functions.flatMap((fn) => {
+    const versions = Array.isArray(fn?.Versions) ? fn.Versions : []
+    return versions.flatMap((version) => {
+      const titles = Array.isArray(version?.Titles) ? version.Titles : []
+      return titles.map((title) => ({
+        documentTypeNamedId: KONTUR_T1_CONTRACT.documentTypeNamedId,
+        documentFunction: String(fn?.Name || ''),
+        documentVersion: String(version?.Version || ''),
+        titleIndex: Number(title?.Index),
+        isFormal: Boolean(title?.IsFormal),
+        hasXsdUrl: Boolean(title?.XsdUrl),
+        hasUserDataXsdUrl: Boolean(title?.UserDataXsdUrl),
+      }))
+    })
+  })
+}
+
 /** Finds the currently pinned T1 contract in a GetDocumentTypes (V3) JSON response. */
 export function findKonturT1Descriptor(response) {
   const documentTypes = Array.isArray(response?.DocumentTypes) ? response.DocumentTypes : []
@@ -104,11 +126,38 @@ export function findKonturT1Descriptor(response) {
   }
 }
 
+export function analyzeKonturT1Contract(response) {
+  const descriptor = findKonturT1Descriptor(response)
+  return {
+    matchesPinned: Boolean(descriptor),
+    pinned: {
+      documentTypeNamedId: KONTUR_T1_CONTRACT.documentTypeNamedId,
+      documentFunction: KONTUR_T1_CONTRACT.documentFunction,
+      documentVersion: KONTUR_T1_CONTRACT.documentVersion,
+      titleIndex: KONTUR_T1_CONTRACT.titleIndex,
+    },
+    descriptor,
+    available: listKonturLogisticsWaybillContracts(response),
+  }
+}
+
 export async function discoverKonturT1Descriptor({ boxId, accessToken, fetchImpl = fetch, baseUrl = API_BASE }) {
   const documentTypes = await getKonturDocumentTypes({ boxId, accessToken, fetchImpl, baseUrl })
-  const descriptor = findKonturT1Descriptor(documentTypes)
-  if (!descriptor) throw new Error('Kontur T1 descriptor not found in GetDocumentTypes (V3) response')
-  if (!descriptor.xsdUrl || !descriptor.userDataXsdUrl) throw new Error('Kontur T1 descriptor does not expose XsdUrl/UserDataXsdUrl')
+  const analysis = analyzeKonturT1Contract(documentTypes)
+  const descriptor = analysis.descriptor
+  if (!descriptor) {
+    const error = new Error('Pinned Kontur T1 contract not found in GetDocumentTypes (V3) response; automatic version switching is disabled')
+    error.code = 'kontur_contract_drift'
+    error.pinned = analysis.pinned
+    error.available = analysis.available
+    throw error
+  }
+  if (!descriptor.xsdUrl || !descriptor.userDataXsdUrl) {
+    const error = new Error('Kontur T1 descriptor does not expose XsdUrl/UserDataXsdUrl')
+    error.code = 'kontur_schema_urls_missing'
+    error.descriptor = descriptor
+    throw error
+  }
   return descriptor
 }
 
@@ -153,6 +202,7 @@ export function konturPublicCapabilities(config = konturConfigFromEnv()) {
     accessTokenConfigured: status.accessTokenConfigured,
     contract: KONTUR_T1_CONTRACT,
     schemaDiscoveryReady: true,
+    schemaDriftFailClosed: true,
     schemaDiscoveryWiredToGateway: false,
     userDataPreviewWiredToGateway: true,
     userDataPreviewExternalCall: false,
@@ -160,6 +210,6 @@ export function konturPublicCapabilities(config = konturConfigFromEnv()) {
     generateTitleWiredToGateway: false,
     postMessageImplemented: false,
     sendWiredToGateway: false,
-    note: 'GetDocumentTypes/GetContent и GenerateTitleXml подготовлены как server-only функции. Gateway публикует только локальный UserDataXml preview; подписание и PostMessage не реализованы.',
+    note: 'GetDocumentTypes/GetContent и GenerateTitleXml подготовлены как server-only функции. Новая версия контракта никогда не выбирается автоматически; gateway публикует только локальный UserDataXml preview.',
   }
 }
