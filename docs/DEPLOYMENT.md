@@ -73,9 +73,13 @@ Checker останавливает запуск при опасных настр
 - пустой Data API public key;
 - `service_role` вместо public key;
 - wildcard CORS;
-- подозрительный секрет в `VITE_*`;
-- внешний rate limit выше обычного;
-- sandbox без Kontur BoxId/token.
+- server secret/database URL в `VITE_*`;
+- внешний operator rate limit выше обычного;
+- sandbox без Kontur BoxId/token;
+- отсутствующий/невалидный `EPD_DATABASE_URL`;
+- backup passphrase короче 20 символов или совпадает с паролем БД;
+- небезопасный backup retention/directory;
+- restore-test URL совпадает с production DB.
 
 Checker не выводит значения секретов.
 
@@ -120,10 +124,10 @@ EPD_OPERATOR_MODE=disabled
 
 ## 5. Server-day helper
 
-Когда на сервере уже установлены Docker и Docker Compose plugin, можно запустить весь безопасный pre-deploy pipeline одной командой:
+Когда на сервере уже установлены Docker и Docker Compose plugin, можно запустить безопасный pre-deploy pipeline одной командой:
 
 ```bash
-bash deploy/server-day.sh .env.production
+sh deploy/server-day.sh .env.production
 ```
 
 Скрипт:
@@ -138,7 +142,7 @@ bash deploy/server-day.sh .env.production
 8. читает `/api/operator/capabilities`;
 9. аварийно останавливается, если gateway перестал сообщать `externalSendEnabled=false`.
 
-Скрипт **не устанавливает Docker**, не изменяет firewall и не настраивает DNS — эти действия зависят от конкретного VPS/ОС.
+Скрипт **не устанавливает Docker**, не изменяет firewall, не настраивает DNS и сам не применяет SQL-миграции.
 
 ## 6. HTTPS reverse proxy
 
@@ -167,17 +171,13 @@ deploy/Caddyfile.example
 5. оставьте project `8080` на loopback;
 6. gateway `8787` наружу не открывайте.
 
-Caddy может автоматически получить/обновлять TLS certificate после корректной настройки DNS.
-
 `EPD_ALLOWED_ORIGINS` задаётся точным HTTPS origin:
 
 ```env
 EPD_ALLOWED_ORIGINS=https://epd.example.ru
 ```
 
-`*` запрещён deployment checker.
-
-После выбора production-домена добавьте его в Supabase Auth redirect URLs.
+`*` запрещён deployment checker. После выбора домена добавьте его в Supabase Auth redirect URLs.
 
 ## 7. Auth/RLS smoke test
 
@@ -274,14 +274,53 @@ sandboxGenerateTitle.ready   = true
 
 ## 12. Backup/recovery
 
-До первых реальных клиентов:
+Production checker требует server-only backup configuration:
 
-- ежедневный backup PostgreSQL;
-- копия вне основного VPS;
-- шифрование backup;
-- тест восстановления;
-- документированный RPO/RTO;
-- защищённый backup secrets/env вне Git.
+```env
+EPD_DATABASE_URL=postgresql://USER:PASSWORD@DB_HOST:5432/DB_NAME
+EPD_BACKUP_DIR=.backups
+EPD_BACKUP_RETENTION_DAYS=14
+EPD_BACKUP_PASSPHRASE=LONG_RANDOM_SECRET_DIFFERENT_FROM_DB_PASSWORD
+EPD_POSTGRES_CLIENT_IMAGE=postgres:17-alpine
+```
+
+Создать encrypted backup:
+
+```bash
+npm run backup:create
+```
+
+Проверить существующий backup:
+
+```bash
+npm run backup:verify -- /absolute/path/epd-light-YYYYMMDDTHHMMSSZ.dump.enc
+```
+
+Restore drill выполняется **только в отдельную disposable test DB**:
+
+```env
+EPD_RESTORE_TEST_DATABASE_URL=postgresql://USER:PASSWORD@DB_HOST:5432/epd_restore_test
+EPD_RESTORE_TEST_CONFIRM=RESTORE_TEST_ONLY
+```
+
+```bash
+npm run backup:restore:test -- /absolute/path/epd-light-YYYYMMDDTHHMMSSZ.dump.enc
+```
+
+Backup хранится в encrypted виде, получает SHA-256 и автоматически проходит `pg_restore --list`. Plaintext dump временный и удаляется после операции.
+
+Копия на том же VPS не считается полноценным backup: encrypted triplet необходимо переносить в отдельное хранилище/на второй сервер. Backup passphrase рядом с архивом не хранится.
+
+Полный runbook: [`BACKUP-RECOVERY.md`](BACKUP-RECOVERY.md).
+
+Для будущего VPS есть необязательные systemd templates:
+
+```text
+deploy/systemd/epd-light-backup.service.example
+deploy/systemd/epd-light-backup.timer.example
+```
+
+Перед включением они обязательно адаптируются под реального Linux-пользователя, путь проекта и backup directory.
 
 ## 13. Server-day checklist
 
@@ -308,7 +347,11 @@ sandboxGenerateTitle.ready   = true
 - [ ] Supabase Auth redirect URLs ограничены доменом;
 - [ ] `EPD_ALLOWED_ORIGINS` содержит только нужный HTTPS origin;
 - [ ] firewall не публикует `8080/8787`;
-- [ ] backup и recovery проверены;
+- [ ] `npm run backup:create` успешно создал encrypted backup;
+- [ ] backup verify проходит;
+- [ ] encrypted backup скопирован вне VPS;
+- [ ] первый restore drill выполнен на отдельной test DB;
+- [ ] дата следующего restore drill зафиксирована;
 - [ ] `externalSendEnabled=false`;
 - [ ] `PostMessage` отсутствует.
 
