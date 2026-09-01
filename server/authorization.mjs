@@ -41,5 +41,8 @@ export const EXTERNAL_OPERATOR_AUTHORIZATION_POLICY = Object.freeze({
   clientPayloadAuthoritative: false,
   hidesCrossAccountDocumentExistence: true,
   gatewayExternalRouteEnabled: false,
-  backendDocumentRepositoryReady: false,
+  backendDocumentRepositoryAdapterReady: true,
+  supabaseRlsUsed: true,
+  serviceRoleRequired: false,
+  runtimeRepositoryConfigurationRequired: true,
 })
