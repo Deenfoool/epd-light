@@ -1,6 +1,7 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { konturPublicCapabilities } from './providers/kontur.mjs'
+import { KONTUR_USERDATA_PREVIEW_CONTRACT, buildKonturT1UserDataXml, validateKonturT1Candidate } from './providers/kontur-userdata.mjs'
 
 const port = Number(process.env.PORT || 8787)
 const provider = process.env.EPD_OPERATOR_PROVIDER || 'none'
@@ -76,7 +77,7 @@ function preflightCandidate(input) {
   if (!input?.driver?.fullName) errors.push('не указан водитель')
   if (!input?.readiness?.candidate) warnings.push('frontend operator-readiness содержит незаполненные поля')
   warnings.push('server preflight не является XSD-валидацией ФНС')
-  warnings.push('provider adapter не подключён к gateway и внешние API не вызываются')
+  warnings.push('provider adapter не подключён к внешней отправке и внешние API здесь не вызываются')
   return { ok: errors.length === 0, errors, warnings }
 }
 
@@ -125,8 +126,9 @@ const server = createServer(async (req, res) => {
       xsdValidationEnabled: false,
       authRequiredForFutureSend: true,
       supportedCandidate: 'epd-light/operator-candidate-v1',
+      localKonturUserDataPreview: KONTUR_USERDATA_PREVIEW_CONTRACT,
       providerAdapter: providerCapabilities(),
-      message: 'Gateway работает, но внешняя отправка намеренно отключена до проверки provider adapter, UserDataXsd mapping, подписания и операторского тестового контура.',
+      message: 'Gateway умеет локально собирать preview UserDataXml, но GenerateTitleXml, подписание и отправка наружу намеренно отключены.',
       requestId,
     }, requestId, origin)
     return
@@ -144,12 +146,38 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/operator/kontur/userdata-preview') {
+    try {
+      const body = await readJson(req)
+      const validation = validateKonturT1Candidate(body)
+      if (!validation.ok) {
+        sendJson(res, 422, { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId }, requestId, origin)
+        return
+      }
+      const xml = buildKonturT1UserDataXml(body)
+      sendJson(res, 200, {
+        ok: true,
+        errors: [],
+        warnings: validation.warnings,
+        xml,
+        contract: KONTUR_USERDATA_PREVIEW_CONTRACT,
+        externalCallMade: false,
+        requestId,
+      }, requestId, origin)
+    } catch (error) {
+      const status = Number(error?.statusCode || 500)
+      const validation = error?.validation
+      sendJson(res, validation ? 422 : status, validation ? { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId } : { error: error instanceof Error ? error.message : 'request failed', requestId }, requestId, origin)
+    }
+    return
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/operator/send') {
     sendJson(res, 503, {
       error: 'operator_send_disabled',
       provider,
       mode: operatorMode,
-      message: 'Юридически значимая отправка заблокирована: provider adapter не подключён к send, а подписание и операторский тестовый контур не настроены.',
+      message: 'Юридически значимая отправка заблокирована: GenerateTitleXml/PostMessage не подключены к gateway, а подписание и операторский тестовый контур не настроены.',
       requestId,
     }, requestId, origin)
     return
