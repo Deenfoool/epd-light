@@ -24,6 +24,7 @@ const requiredSnippets = [
   'function Integrations(',
   'function RussianAddressEditor(',
   'partyToCompany',
+  'gatewayFetch',
   'ЧЕРНОВИК — НЕ ЯВЛЯЕТСЯ ПЕРЕВОЗОЧНЫМ ДОКУМЕНТОМ',
   'Статусы «Передан оператору», «Подписан» и «Принят ГИС ЭПД» недоступны',
   'dirty.current=true',
@@ -50,9 +51,16 @@ const requiredSnippets = [
   '/api/operator/capabilities',
   '/api/operator/kontur/userdata-preview',
   'Kontur XML preview',
+  'Supabase access token',
   'Gateway online',
 ]
 for (const snippet of requiredSnippets) if (!app.includes(snippet)) fail(`missing app invariant: ${snippet}`)
+
+const gatewayClient = await readFile(path.join(root, 'src', 'gateway.ts'), 'utf8')
+for (const snippet of ["import { supabase } from './data'", 'data.session?.access_token', "headers.set('authorization'", 'return fetch']) {
+  if (!gatewayClient.includes(snippet)) fail(`frontend gateway auth invariant missing: ${snippet}`)
+}
+if (gatewayClient.includes('service_role')) fail('frontend gateway helper must never use service_role')
 
 const migration = await readFile(path.join(root, 'supabase', 'migrations', '202609010001_init.sql'), 'utf8')
 for (const table of ['profiles','companies','vehicles','drivers','documents','integration_requests']) {
@@ -81,12 +89,25 @@ for (const snippet of ['epd-light/operator-candidate-v1', 'draftModelVersion: 4'
 }
 
 const gateway = await readFile(path.join(root, 'server', 'index.mjs'), 'utf8')
-for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'", "url.pathname === '/api/operator/kontur/userdata-preview'", "url.pathname === '/api/operator/send'", 'externalSendEnabled: false', 'externalCallMade: false', "error: 'operator_send_disabled'", 'writeGatewayAudit', 'path: url.pathname']) {
-  if (!gateway.includes(snippet)) fail(`gateway fail-closed/audit invariant missing: ${snippet}`)
+for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'", "url.pathname === '/api/operator/kontur/userdata-preview'", "url.pathname === '/api/operator/send'", "url.pathname.startsWith('/api/operator/')", 'authenticateGatewayRequest', 'consumeRateLimit', 'rateLimitHeaders', 'externalSendEnabled: false', 'externalCallMade: false', "error: 'operator_send_disabled'", 'writeGatewayAudit', 'path: url.pathname']) {
+  if (!gateway.includes(snippet)) fail(`gateway auth/fail-closed/audit invariant missing: ${snippet}`)
 }
-if (gateway.includes('/api/operator/kontur/generate-title')) fail('GenerateTitleXml must not be exposed as an unauthenticated gateway route')
-if (gateway.includes('/api/operator/kontur/schemas')) fail('authenticated schema discovery must not be exposed as an unauthenticated gateway route')
-if (gateway.includes('req.headers.authorization')) fail('gateway audit/routing must not read Authorization into application logging')
+if (gateway.includes('/api/operator/kontur/generate-title')) fail('GenerateTitleXml must not be exposed as a gateway route')
+if (gateway.includes('/api/operator/kontur/schemas')) fail('schema discovery must not be exposed as a gateway route')
+if (gateway.includes('req.headers.authorization')) fail('gateway routing/audit must delegate Authorization handling to auth module')
+
+const auth = await readFile(path.join(root, 'server', 'auth.mjs'), 'utf8')
+for (const snippet of ['createRemoteJWKSet', 'jwtVerify', '/auth/v1/.well-known/jwks.json', "audience: String(env.EPD_AUTH_AUDIENCE || 'authenticated')", "role !== 'authenticated'", "algorithms: config.algorithms", 'Non-disabled operator mode requires EPD_GATEWAY_AUTH_MODE=supabase', 'sharedJwtSecretAccepted: false']) {
+  if (!auth.includes(snippet)) fail(`gateway auth invariant missing: ${snippet}`)
+}
+for (const forbidden of ['JWT_SECRET', 'service_role', 'console.log(token)', 'console.log(payload)']) {
+  if (auth.includes(forbidden)) fail(`gateway auth contains forbidden secret/logging pattern: ${forbidden}`)
+}
+
+const rateLimit = await readFile(path.join(root, 'server', 'rate-limit.mjs'), 'utf8')
+for (const snippet of ['consumeRateLimit', 'requestNetworkKey', "req?.headers?.['x-real-ip']", 'authenticatedRateKey', 'retry-after', 'createHash']) {
+  if (!rateLimit.includes(snippet)) fail(`gateway rate limit invariant missing: ${snippet}`)
+}
 
 const audit = await readFile(path.join(root, 'server', 'audit.mjs'), 'utf8')
 for (const snippet of ["event: 'gateway_request'", 'createGatewayAuditEvent', 'writeGatewayAudit', 'auditErrorCode', 'SAFE_CODE_RE', 'JSON.stringify(event)']) {
@@ -122,9 +143,20 @@ for (const snippet of ['strict allow-list', 'super-secret-bearer-token', 'auditE
 }
 
 const compose = await readFile(path.join(root, 'docker-compose.yml'), 'utf8')
-if (!compose.includes('gateway:') || !compose.includes('expose:') || !compose.includes('nginx-compose.conf')) fail('docker compose gateway wiring missing')
+for (const snippet of ['gateway:', 'expose:', 'nginx-compose.conf', 'EPD_GATEWAY_AUTH_MODE', 'EPD_AUTH_SUPABASE_URL', 'EPD_RATE_LIMIT_MAX', 'EPD_KONTUR_ACCESS_TOKEN']) {
+  if (!compose.includes(snippet)) fail(`docker compose gateway wiring missing: ${snippet}`)
+}
 const nginxCompose = await readFile(path.join(root, 'deploy', 'nginx-compose.conf'), 'utf8')
-if (!nginxCompose.includes('proxy_pass http://gateway:8787')) fail('nginx does not proxy /api to private gateway')
+for (const snippet of ['proxy_pass http://gateway:8787', 'proxy_set_header Authorization $http_authorization', 'proxy_set_header X-Real-IP $remote_addr', 'proxy_set_header X-Forwarded-For $remote_addr']) {
+  if (!nginxCompose.includes(snippet)) fail(`nginx gateway security invariant missing: ${snippet}`)
+}
+
+const serverDockerfile = await readFile(path.join(root, 'server', 'Dockerfile'), 'utf8')
+for (const snippet of ['COPY package.json', 'npm install --omit=dev', 'COPY . .', 'USER node']) {
+  if (!serverDockerfile.includes(snippet)) fail(`gateway Docker image invariant missing: ${snippet}`)
+}
+const serverPkg = JSON.parse(await readFile(path.join(root, 'server', 'package.json'), 'utf8'))
+if (serverPkg.dependencies?.jose !== '6.2.10') fail('gateway Docker runtime must pin jose 6.2.10')
 
 const main = await readFile(path.join(root, 'src', 'main.tsx'), 'utf8')
 if (!main.includes("import './v2.css'")) fail('draft-v4 responsive CSS is not loaded')
@@ -133,8 +165,9 @@ const schemaCheck = await readFile(path.join(root, 'scripts', 'check-fns-schema.
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-for (const script of ['build','prebuild','preflight','audit:test','gateway:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:schema:check','kontur:schema:save','fns:schema:check']) {
+for (const script of ['build','prebuild','preflight','audit:test','auth:test','rate-limit:test','gateway:test','gateway:auth:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:schema:check','kontur:schema:save','fns:schema:check']) {
   if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
 }
+if (pkg.dependencies?.jose !== '6.2.10') fail('root jose dependency must stay pinned to tested version 6.2.10')
 
-console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, privacy-safe audit, draft-v4 and Kontur schema/UserData/GenerateTitle boundaries verified`)
+console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, JWT auth, rate limiting, privacy-safe audit, Docker gateway, draft-v4 and Kontur boundaries verified`)
