@@ -2,10 +2,19 @@
 .review-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 .review-grid .card{min-width:0}
 .review-grid .issues{overflow-wrap:anywhere}
+.address-details{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden}
+.address-details summary{cursor:pointer;padding:11px 13px;font-size:.86rem;font-weight:700;color:#334155;display:flex;align-items:center;justify-content:space-between;gap:12px;list-style-position:inside}
+.address-details summary span{font-size:.72rem;font-weight:500;color:var(--muted)}
+.address-details[open] summary{border-bottom:1px solid var(--line);background:#f8fafc}
+.address-details .address-grid{padding:14px}
+.address-details>p{padding:0 14px 14px;margin:0}
+.address-pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+.address-pair .address-details{margin-top:0}
 
 @media(max-width:1180px){
   .status-flow{grid-template-columns:repeat(3,minmax(0,1fr))}
   .review-grid{grid-template-columns:1fr 1fr}
+  .address-pair{grid-template-columns:1fr}
 }
 
 @media(max-width:960px){
@@ -15,4 +24,5 @@
 
 @media(max-width:720px){
   .status-flow,.review-grid{grid-template-columns:1fr}
+  .address-details summary{align-items:flex-start;flex-direction:column;gap:3px}
 }
