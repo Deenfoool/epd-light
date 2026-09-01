@@ -22,7 +22,6 @@ const requiredSnippets = [
   'function ImportPage(',
   'function Integrations(',
   'ЧЕРНОВИК — НЕ ЯВЛЯЕТСЯ ПЕРЕВОЗОЧНЫМ ДОКУМЕНТОМ',
-  'Готов к передаче оператору',
   'Статусы «Передан оператору», «Подписан» и «Принят ГИС ЭПД» недоступны',
   'dirty.current=true',
   "addEventListener('beforeunload',beforeUnload)",
@@ -30,6 +29,13 @@ const requiredSnippets = [
   'positiveNumber(r.places)',
   'positiveNumber(r.weight)',
   'https://www.nalog.gov.ru/rn77/related_activities/el_doc/el_bus_entities/edotransp/',
+  'Integration JSON',
+  'buildOperatorDraft',
+  'operatorReadiness',
+  'Фактическое прибытие на погрузку',
+  'Серия ВУ',
+  'Номер заказа / заявки',
+  'не валидирует XML по XSD ФНС',
 ]
 for (const snippet of requiredSnippets) if (!app.includes(snippet)) fail(`missing app invariant: ${snippet}`)
 
@@ -44,7 +50,20 @@ for (const snippet of ['interface OperatorAdapter', 'assertOperatorConfigured', 
   if (!operator.includes(snippet)) fail(`operator safety invariant missing: ${snippet}`)
 }
 
-const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (!pkg.scripts?.build || !pkg.scripts?.prebuild || !pkg.scripts?.preflight) fail('build/prebuild/preflight scripts missing')
+const etrn = await readFile(path.join(root, 'src', 'etrn.ts'), 'utf8')
+for (const snippet of ['FNS_ETRN_REFERENCE', "knd: '1110339'", "formatVersion: '5.01'", 'ON_TRNACLGROT_1_973_01_05_01_02', 'normalizeEtrn', 'operatorReadiness']) {
+  if (!etrn.includes(snippet)) fail(`draft-v2 invariant missing: ${snippet}`)
+}
 
-console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS and safety checks passed`)
+const operatorDraft = await readFile(path.join(root, 'src', 'operator-draft.ts'), 'utf8')
+for (const snippet of ['epd-light/operator-candidate-v1', 'не является XML ФНС', 'unresolvedByDesign']) {
+  if (!operatorDraft.includes(snippet)) fail(`operator draft invariant missing: ${snippet}`)
+}
+
+const schemaCheck = await readFile(path.join(root, 'scripts', 'check-fns-schema.mjs'), 'utf8')
+if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
+
+const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+if (!pkg.scripts?.build || !pkg.scripts?.prebuild || !pkg.scripts?.preflight || !pkg.scripts?.['fns:schema:check']) fail('required build/preflight/schema scripts missing')
+
+console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, draft-v2 and operator safety checks passed`)
