@@ -21,7 +21,23 @@ if (!status.configured) {
 const hash = (text) => createHash('sha256').update(text, 'utf8').digest('hex')
 const looksLikeXsd = (text) => /<(?:xs|xsd):schema\b/i.test(String(text || ''))
 
-const descriptor = await discoverKonturT1Descriptor({ boxId: config.boxId, accessToken: config.accessToken })
+let descriptor
+try {
+  descriptor = await discoverKonturT1Descriptor({ boxId: config.boxId, accessToken: config.accessToken })
+} catch (error) {
+  if (error?.code === 'kontur_contract_drift') {
+    console.error(JSON.stringify({
+      ok: false,
+      error: 'kontur_contract_drift',
+      message: 'Pinned T1 contract is unavailable. Review available contracts manually; automatic version switching is disabled.',
+      pinned: error.pinned,
+      available: error.available,
+    }, null, 2))
+    process.exit(3)
+  }
+  throw error
+}
+
 const [titleXsd, userDataXsd] = await Promise.all([
   getKonturContent({ contentPath: descriptor.xsdUrl, accessToken: config.accessToken }),
   getKonturContent({ contentPath: descriptor.userDataXsdUrl, accessToken: config.accessToken }),
@@ -31,6 +47,7 @@ if (!looksLikeXsd(titleXsd)) throw new Error('Kontur Title XSD response does not
 if (!looksLikeXsd(userDataXsd)) throw new Error('Kontur UserDataXsd response does not look like an XSD schema')
 
 const report = {
+  ok: true,
   checkedAt: new Date().toISOString(),
   contract: KONTUR_T1_CONTRACT,
   descriptor,
