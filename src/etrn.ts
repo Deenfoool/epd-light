@@ -83,7 +83,8 @@ export const statusLabel: Record<DocStatus,string> = {
   draft: 'Черновик', incomplete: 'Требует заполнения', ready: 'Черновик готов', archived: 'Архив'
 }
 export const validInn = (v:string) => /^\d{10}$|^\d{12}$/.test(v.trim())
-export const validGuid = (v:string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.trim())
+/** Diadoc BoxId is treated as a generic GUID; do not impose UUID version/variant bits. */
+export const validGuid = (v:string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.trim())
 export type IssueKind = 'required' | 'operator' | 'recommended'
 export type Issue = { field:string; message:string; step:number; kind:IssueKind }
 
@@ -104,6 +105,7 @@ export function validateEtrn(raw:EtrnData): Issue[] {
     if(!addressCandidateReady(p.russianAddress)) add(label,'структурированный адрес участника можно заполнить для альтернативного operator mapping',1,'recommended')
     if(!p.phone.trim()&&!p.email.trim()) add(label,'нет телефона или email',1,'operator')
     if(!p.edoId?.trim()) add(label,'для первого адаптера нужен BoxId / ID участника ЭДО',1,'operator')
+    else if(!validGuid(p.edoId)) add(label,'BoxId должен иметь формат GUID',1,'operator')
   }
   if(!d.route.loadAddress.trim()) add('Маршрут','не указан адрес погрузки',2)
   if(!d.route.unloadAddress.trim()) add('Маршрут','не указан адрес выгрузки',2)
@@ -133,7 +135,7 @@ export function validateEtrn(raw:EtrnData): Issue[] {
   if(!d.transport.driverName.trim()) add('Водитель','не указано ФИО',4)
   if(!d.transport.driverPhone.trim()) add('Водитель','не указан телефон',4,'operator')
   if(!d.transport.vehicleType?.trim()) add('Транспорт','не указан тип транспортного средства',4,'operator')
-  if(!d.transport.ownershipType?.trim()) add('Транспорт','не указан тип/код владения транспортным средством',4,'operator')
+  if(!d.transport.ownershipType?.trim()) add('Транспорт','не указан код Ownership',4,'operator')
   if(!d.transport.driverLicenseSeries?.trim()) add('Водитель','не указана серия водительского удостоверения',4,'operator')
   if(!d.transport.driverLicenseNumber?.trim() && !d.transport.driverLicense?.trim()) add('Водитель','не указан номер водительского удостоверения',4,'operator')
   if(!d.transport.driverLicenseDate) add('Водитель','не указана дата выдачи водительского удостоверения',4,'operator')
