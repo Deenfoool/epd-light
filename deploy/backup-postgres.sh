@@ -110,7 +110,7 @@ chmod 600 "$CHECKSUM_FILE" 2>/dev/null || true
 chmod 600 "$META_FILE" 2>/dev/null || true
 
 # Verify encrypted artifact end-to-end before announcing success.
-EPD_BACKUP_PASSPHRASE="$PASSPHRASE" "$ROOT_DIR/deploy/verify-postgres-backup.sh" "$FINAL_FILE" >/dev/null
+EPD_BACKUP_PASSPHRASE="$PASSPHRASE" sh "$ROOT_DIR/deploy/verify-postgres-backup.sh" "$FINAL_FILE" >/dev/null
 
 echo "Encrypted backup verified."
 
