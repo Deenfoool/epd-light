@@ -4,7 +4,18 @@ import { setTimeout as sleep } from 'node:timers/promises'
 const port = 18787 + Math.floor(Math.random() * 1000)
 const base = `http://127.0.0.1:${port}`
 const child = spawn(process.execPath, ['server/index.mjs'], {
-  env: { ...process.env, PORT: String(port), EPD_OPERATOR_PROVIDER: 'none', EPD_OPERATOR_MODE: 'disabled' },
+  env: {
+    ...process.env,
+    PORT: String(port),
+    EPD_OPERATOR_PROVIDER: 'none',
+    EPD_OPERATOR_MODE: 'disabled',
+    EPD_GATEWAY_AUTH_MODE: 'disabled',
+    EPD_AUTH_SUPABASE_URL: '',
+    EPD_DATA_SUPABASE_URL: '',
+    EPD_DATA_SUPABASE_PUBLIC_KEY: '',
+    EPD_KONTUR_BOX_ID: '',
+    EPD_KONTUR_ACCESS_TOKEN: '',
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
 
@@ -36,6 +47,8 @@ try {
   assert(capabilitiesResponse.status === 200, 'capabilities status must be 200')
   assert(capabilities.externalSendEnabled === false, 'external sending must be fail-closed')
   assert(capabilities.xsdValidationEnabled === false, 'XSD validation must not be claimed')
+  assert(capabilities.auth?.mode === 'disabled', 'local smoke test must force disabled auth regardless of parent env')
+  assert(capabilities.sandboxGenerateTitle?.enabled === false, 'sandbox generation must remain disabled in local smoke test')
   assert(capabilities.localKonturUserDataPreview?.externalCallRequired === false, 'UserData preview must be local-only')
 
   const candidate = {
@@ -75,6 +88,11 @@ try {
   assert(preview.contract?.xsdValidated === false, 'UserData preview must not claim XSD validation')
   assert(String(preview.xml).includes('<LogisticsWaybillConsignorTitle'), 'UserData preview XML root missing')
 
+  const sandboxResponse = await fetch(`${base}/api/operator/kontur/generate-title-sandbox`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }),
+  })
+  assert(sandboxResponse.status === 404, 'sandbox GenerateTitle route must be unavailable while operator mode is disabled')
+
   const sendResponse = await fetch(`${base}/api/operator/send`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(candidate),
   })
@@ -90,7 +108,7 @@ try {
   assert(stdout.includes('"path":"/api/operator/preflight"'), 'preflight route should be audited')
   assert(stdout.includes('"errorCode":"operator_send_disabled"'), 'disabled send should expose only machine-safe audit code')
 
-  console.log('Gateway smoke test OK: health, local Kontur preview, fail-closed send and payload-free audit verified')
+  console.log('Gateway smoke test OK: isolated local auth, preview, disabled sandbox/send and payload-free audit verified')
 } finally {
   child.kill('SIGTERM')
   await Promise.race([new Promise((resolve) => child.once('exit', resolve)), sleep(1000)])
