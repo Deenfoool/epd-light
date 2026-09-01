@@ -1,5 +1,5 @@
 import { FNS_ETRN_REFERENCE, cargoTotals, normalizeEtrn, operatorReadiness } from './etrn'
-import type { DocumentRow, Party } from './types'
+import type { DocumentRow, Party, RussianAddressDraft } from './types'
 
 export type OperatorPartyCandidate = {
   kind: 'org' | 'ip'
@@ -7,17 +7,23 @@ export type OperatorPartyCandidate = {
   inn: string
   kpp: string
   address: string
+  russianAddress: RussianAddressDraft
   phone: string
   email: string
   edoId: string
 }
 
+const address = (a?: RussianAddressDraft): RussianAddressDraft => ({
+  zipCode: a?.zipCode ?? '', region: a?.region ?? '', city: a?.city ?? '', settlement: a?.settlement ?? '',
+  street: a?.street ?? '', building: a?.building ?? '', corpus: a?.corpus ?? '', apartment: a?.apartment ?? '',
+})
 const party = (p: Party): OperatorPartyCandidate => ({
   kind: p.kind,
   name: p.name,
   inn: p.inn,
   kpp: p.kpp,
   address: p.address,
+  russianAddress: address(p.russianAddress),
   phone: p.phone,
   email: p.email,
   edoId: p.edoId ?? '',
@@ -38,6 +44,7 @@ export function buildOperatorDraft(doc: DocumentRow) {
 
   return {
     kind: 'epd-light/operator-candidate-v1',
+    draftModelVersion: 3,
     disclaimer: 'Интеграционный черновик. Не является XML ФНС, ЭТрН, подписью или фактом передачи в ГИС ЭПД.',
     mappingReference: {
       ...FNS_ETRN_REFERENCE,
@@ -63,11 +70,13 @@ export function buildOperatorDraft(doc: DocumentRow) {
     },
     route: {
       loadingAddress: d.route.loadAddress,
+      loadingRussianAddress: address(d.route.loadRussianAddress),
       plannedLoadingDate: d.route.loadDate,
       plannedLoadingTime: d.route.loadTime,
       actualArrival: d.route.loadArrival ?? '',
       actualDeparture: d.route.loadDeparture ?? '',
       unloadingAddress: d.route.unloadAddress,
+      unloadingRussianAddress: address(d.route.unloadRussianAddress),
       plannedUnloadingDate: d.route.unloadDate,
       plannedUnloadingTime: d.route.unloadTime,
       note: d.route.note,
@@ -126,10 +135,9 @@ export function buildOperatorDraft(doc: DocumentRow) {
       extra: d.terms.extra,
     },
     unresolvedByDesign: [
-      'идентификаторы участников и маршрутизация оператора',
-      'точное преобразование адресов в структуру XSD',
-      'коды классификаторов и условная обязательность элементов',
-      'формирование имени XML-файла и транспортного контейнера',
+      'точные коды OrgType/Ownership/WeighingMethod и условная обязательность берутся из актуального UserDataXsd/GetDocumentTypes',
+      'ИП и иные типы участников должны быть проверены по актуальному UserDataXsd до генерации',
+      'формирование имени итогового XML и транспортного контейнера',
       'подписание КЭП/УНЭП и юридически значимые статусы',
     ],
   }
