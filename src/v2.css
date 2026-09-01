@@ -1,0 +1,18 @@
+.status-flow{grid-template-columns:repeat(6,minmax(0,1fr))}
+.review-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.review-grid .card{min-width:0}
+.review-grid .issues{overflow-wrap:anywhere}
+
+@media(max-width:1180px){
+  .status-flow{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .review-grid{grid-template-columns:1fr 1fr}
+}
+
+@media(max-width:960px){
+  .status-flow{grid-template-columns:1fr 1fr}
+  .review-grid{grid-template-columns:1fr}
+}
+
+@media(max-width:720px){
+  .status-flow,.review-grid{grid-template-columns:1fr}
+}
