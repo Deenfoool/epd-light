@@ -9,7 +9,8 @@ export function rateLimitConfigFromEnv(env = process.env) {
   const windowMs = Math.max(1_000, Number(env.EPD_RATE_LIMIT_WINDOW_MS || 60_000))
   const max = Math.max(1, Number(env.EPD_RATE_LIMIT_MAX || 60))
   const authMax = Math.max(1, Number(env.EPD_AUTH_ATTEMPT_LIMIT_MAX || 120))
-  return { windowMs, max, authMax }
+  const externalMax = Math.max(1, Number(env.EPD_EXTERNAL_RATE_LIMIT_MAX || 10))
+  return { windowMs, max, authMax, externalMax }
 }
 
 export function requestNetworkKey(req) {
