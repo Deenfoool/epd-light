@@ -6,6 +6,7 @@ import { EXTERNAL_OPERATOR_AUTHORIZATION_POLICY } from './authorization.mjs'
 import { authenticatedRateKey, consumeRateLimit, rateLimitConfigFromEnv, rateLimitHeaders, requestNetworkKey } from './rate-limit.mjs'
 import { konturPublicCapabilities } from './providers/kontur.mjs'
 import { KONTUR_USERDATA_PREVIEW_CONTRACT, buildKonturT1UserDataXml, validateKonturT1Candidate } from './providers/kontur-userdata.mjs'
+import { supabaseDocumentRepositoryPublicCapabilities } from './repositories/supabase-documents.mjs'
 
 const port = Number(process.env.PORT || 8787)
 const provider = process.env.EPD_OPERATOR_PROVIDER || 'none'
@@ -153,7 +154,10 @@ const server = createServer(async (req, res) => {
         requiredForOperatorApi: authConfig.mode === 'supabase',
         policy: GATEWAY_AUTH_POLICY,
       },
-      authorization: EXTERNAL_OPERATOR_AUTHORIZATION_POLICY,
+      authorization: {
+        ...EXTERNAL_OPERATOR_AUTHORIZATION_POLICY,
+        repository: supabaseDocumentRepositoryPublicCapabilities(),
+      },
       rateLimit: {
         windowMs: rateConfig.windowMs,
         maxPerAuthenticatedSubject: rateConfig.max,
@@ -162,7 +166,7 @@ const server = createServer(async (req, res) => {
       supportedCandidate: 'epd-light/operator-candidate-v1',
       localKonturUserDataPreview: KONTUR_USERDATA_PREVIEW_CONTRACT,
       providerAdapter: providerCapabilities(),
-      message: 'Gateway умеет локально собирать preview UserDataXml. Operator API защищён auth/rate-limit middleware; внешний GenerateTitle требует server-loaded owned document и пока не опубликован.',
+      message: 'Gateway умеет локально собирать preview UserDataXml. Operator API защищён auth/rate-limit middleware; внешний GenerateTitle требует перечитать принадлежащий пользователю документ через RLS repository и пока не опубликован.',
       requestId,
     })
     return
