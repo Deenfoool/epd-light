@@ -85,9 +85,10 @@ for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pat
   if (!gateway.includes(snippet)) fail(`gateway fail-closed invariant missing: ${snippet}`)
 }
 if (gateway.includes('/api/operator/kontur/generate-title')) fail('GenerateTitleXml must not be exposed as an unauthenticated gateway route')
+if (gateway.includes('/api/operator/kontur/schemas')) fail('authenticated schema discovery must not be exposed as an unauthenticated gateway route')
 
 const konturProvider = await readFile(path.join(root, 'server', 'providers', 'kontur.mjs'), 'utf8')
-for (const snippet of ["documentTypeNamedId: 'LogisticsWaybill'", "documentFunction: 'reception'", "documentVersion: 'kl_trn_mt_05_01'", 'userDataPreviewWiredToGateway: true', 'generateTitleBoundaryReady: true', 'generateTitleWiredToGateway: false', 'postMessageImplemented: false', 'sendWiredToGateway: false']) {
+for (const snippet of ["documentTypeNamedId: 'LogisticsWaybill'", "documentFunction: 'reception'", "documentVersion: 'kl_trn_mt_05_01'", 'findKonturT1Descriptor', 'discoverKonturT1Descriptor', 'getKonturContent', 'schemaDiscoveryReady: true', 'schemaDiscoveryWiredToGateway: false', 'userDataPreviewWiredToGateway: true', 'generateTitleBoundaryReady: true', 'generateTitleWiredToGateway: false', 'postMessageImplemented: false', 'sendWiredToGateway: false']) {
   if (!konturProvider.includes(snippet)) fail(`Kontur provider invariant missing: ${snippet}`)
 }
 
@@ -99,6 +100,11 @@ for (const snippet of ['validateKonturT1Candidate', 'buildKonturT1UserDataXml', 
 const generationBoundary = await readFile(path.join(root, 'server', 'services', 'kontur-title.mjs'), 'utf8')
 for (const snippet of ['generateKonturT1FromCandidate', 'generateKonturT1Xml', 'gatewayRouteExposed: false', 'callsPostMessage: false', 'signed: false', 'sent: false']) {
   if (!generationBoundary.includes(snippet)) fail(`Kontur generation boundary invariant missing: ${snippet}`)
+}
+
+const konturSchemaCheck = await readFile(path.join(root, 'scripts', 'check-kontur-schemas.mjs'), 'utf8')
+for (const snippet of ['discoverKonturT1Descriptor', 'getKonturContent', 'sha256', 'UserDataXsd', '.cache', 'EPD_KONTUR_BOX_ID']) {
+  if (!konturSchemaCheck.includes(snippet)) fail(`Kontur schema checker invariant missing: ${snippet}`)
 }
 
 const compose = await readFile(path.join(root, 'docker-compose.yml'), 'utf8')
@@ -113,8 +119,8 @@ const schemaCheck = await readFile(path.join(root, 'scripts', 'check-fns-schema.
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-for (const script of ['build','prebuild','preflight','gateway:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','fns:schema:check']) {
+for (const script of ['build','prebuild','preflight','gateway:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:schema:check','kontur:schema:save','fns:schema:check']) {
   if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
 }
 
-console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, T1 directories, draft-v4, Kontur UserData/GenerateTitle boundaries and fail-closed operator checks passed`)
+console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, T1 directories, draft-v4, Kontur schema/UserData/GenerateTitle boundaries and fail-closed operator checks passed`)
