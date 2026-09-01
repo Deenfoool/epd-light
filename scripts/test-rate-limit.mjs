@@ -36,7 +36,21 @@ assert(requestNetworkKey(noRealIpA) === requestNetworkKey(noRealIpB), 'fallback 
 const subjectKey = authenticatedRateKey({ subject: 'user-123' }, networkReq)
 assert(subjectKey.length === 24 && subjectKey !== networkKey, 'authenticated subject must use a separate hashed rate key')
 
-const cfg = rateLimitConfigFromEnv({ EPD_RATE_LIMIT_WINDOW_MS: '5000', EPD_RATE_LIMIT_MAX: '12', EPD_AUTH_ATTEMPT_LIMIT_MAX: '30' })
-assert(cfg.windowMs === 5000 && cfg.max === 12 && cfg.authMax === 30, 'rate env configuration not parsed')
+const cfg = rateLimitConfigFromEnv({
+  EPD_RATE_LIMIT_WINDOW_MS: '5000',
+  EPD_RATE_LIMIT_MAX: '12',
+  EPD_AUTH_ATTEMPT_LIMIT_MAX: '30',
+  EPD_EXTERNAL_RATE_LIMIT_MAX: '4',
+})
+assert(cfg.windowMs === 5000 && cfg.max === 12 && cfg.authMax === 30 && cfg.externalMax === 4, 'rate env configuration not parsed')
 
-console.log('Gateway rate limit test OK: fixed window, Retry-After, privacy-safe keys and forwarded-header spoof protection verified')
+clearRateLimitStateForTests()
+const external1 = consumeRateLimit({ key: subjectKey, scope: 'operator-external', max: cfg.externalMax, windowMs: cfg.windowMs, now: 20_000 })
+const external2 = consumeRateLimit({ key: subjectKey, scope: 'operator-external', max: cfg.externalMax, windowMs: cfg.windowMs, now: 20_001 })
+const external3 = consumeRateLimit({ key: subjectKey, scope: 'operator-external', max: cfg.externalMax, windowMs: cfg.windowMs, now: 20_002 })
+const external4 = consumeRateLimit({ key: subjectKey, scope: 'operator-external', max: cfg.externalMax, windowMs: cfg.windowMs, now: 20_003 })
+const external5 = consumeRateLimit({ key: subjectKey, scope: 'operator-external', max: cfg.externalMax, windowMs: cfg.windowMs, now: 20_004 })
+assert(external1.allowed && external2.allowed && external3.allowed && external4.allowed, 'configured external calls should be allowed within limit')
+assert(external5.allowed === false && external5.retryAfter > 0, 'external operator calls need a stricter separate limit')
+
+console.log('Gateway rate limit test OK: fixed window, external-call limit, Retry-After, privacy-safe keys and forwarded-header spoof protection verified')
