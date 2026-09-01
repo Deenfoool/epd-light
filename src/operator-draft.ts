@@ -1,0 +1,136 @@
+import { FNS_ETRN_REFERENCE, cargoTotals, normalizeEtrn, operatorReadiness } from './etrn'
+import type { DocumentRow, Party } from './types'
+
+export type OperatorPartyCandidate = {
+  kind: 'org' | 'ip'
+  name: string
+  inn: string
+  kpp: string
+  address: string
+  phone: string
+  email: string
+  edoId: string
+}
+
+const party = (p: Party): OperatorPartyCandidate => ({
+  kind: p.kind,
+  name: p.name,
+  inn: p.inn,
+  kpp: p.kpp,
+  address: p.address,
+  phone: p.phone,
+  email: p.email,
+  edoId: p.edoId ?? '',
+})
+
+/**
+ * Builds an operator-neutral integration candidate from the internal draft.
+ * It is intentionally NOT XML, NOT an FNS XSD document and NOT a request body
+ * for Kontur, Taxcom or any other accredited operator.
+ *
+ * A provider adapter must transform this structure on the server after the
+ * actual API contract and credentials are available.
+ */
+export function buildOperatorDraft(doc: DocumentRow) {
+  const d = normalizeEtrn(doc.data)
+  const readiness = operatorReadiness(d)
+  const totals = cargoTotals(d)
+
+  return {
+    kind: 'epd-light/operator-candidate-v1',
+    disclaimer: 'Интеграционный черновик. Не является XML ФНС, ЭТрН, подписью или фактом передачи в ГИС ЭПД.',
+    mappingReference: {
+      ...FNS_ETRN_REFERENCE,
+      mappingScope: 'Т1 / информация грузоотправителя, предварительное сопоставление полей',
+    },
+    readiness: {
+      candidate: readiness.candidate,
+      operatorFieldsMissing: readiness.missing,
+      warnings: readiness.warnings,
+    },
+    document: {
+      number: doc.doc_number,
+      date: doc.doc_date,
+      orderNumber: d.terms.orderNumber ?? '',
+      orderDate: d.terms.orderDate ?? '',
+      contractNumber: d.terms.contractNumber,
+      contractDate: d.terms.contractDate,
+    },
+    participants: {
+      shipper: party(d.shipper),
+      consignee: party(d.consignee),
+      carrier: party(d.carrier),
+    },
+    route: {
+      loadingAddress: d.route.loadAddress,
+      plannedLoadingDate: d.route.loadDate,
+      plannedLoadingTime: d.route.loadTime,
+      actualArrival: d.route.loadArrival ?? '',
+      actualDeparture: d.route.loadDeparture ?? '',
+      unloadingAddress: d.route.unloadAddress,
+      plannedUnloadingDate: d.route.unloadDate,
+      plannedUnloadingTime: d.route.unloadTime,
+      note: d.route.note,
+    },
+    loadingFacts: {
+      actualGrossWeight: d.route.actualWeight || String(totals.weight || ''),
+      actualPlaces: d.route.actualPlaces || String(totals.places || ''),
+      massDeterminationMethod: d.route.massMethod ?? '',
+    },
+    cargo: d.cargo.map((x) => ({
+      internalId: x.id,
+      name: x.name,
+      state: x.state ?? '',
+      places: x.places,
+      unit: x.unit,
+      grossWeightKg: x.weight,
+      declaredValue: x.value,
+      currencyCode: x.currency ?? '643',
+      packaging: x.packaging,
+      packagingMethod: x.packagingMethod ?? '',
+      packagingCode: x.packagingCode ?? '',
+      marking: x.marking ?? '',
+      specialConditions: x.conditions,
+    })),
+    vehicle: {
+      registrationNumber: d.transport.plate,
+      trailerRegistrationNumber: d.transport.trailerPlate,
+      type: d.transport.vehicleType ?? '',
+      brand: d.transport.brand,
+      model: d.transport.model,
+      ownershipType: d.transport.ownershipType ?? '',
+      loadCapacity: d.transport.loadCapacity ?? '',
+      volumeCapacity: d.transport.volumeCapacity ?? '',
+    },
+    driver: {
+      fullName: d.transport.driverName,
+      phone: d.transport.driverPhone,
+      licenseLegacy: d.transport.driverLicense,
+      licenseSeries: d.transport.driverLicenseSeries ?? '',
+      licenseNumber: d.transport.driverLicenseNumber ?? '',
+      licenseIssueDate: d.transport.driverLicenseDate ?? '',
+      waybillNumber: d.transport.waybillNumber ?? '',
+      waybillDate: d.transport.waybillDate ?? '',
+    },
+    shipperInstructions: {
+      instructions: d.terms.shipperInstructions ?? '',
+      redirectionContact: d.terms.redirectionContact ?? '',
+    },
+    signer: {
+      fullName: d.signer?.fullName ?? '',
+      position: d.signer?.position ?? '',
+    },
+    commercial: {
+      carriagePrice: d.terms.price,
+      comment: d.terms.comment,
+      extra: d.terms.extra,
+    },
+    unresolvedByDesign: [
+      'идентификаторы участников и маршрутизация оператора',
+      'точное преобразование адресов в структуру XSD',
+      'коды классификаторов и условная обязательность элементов',
+      'формирование имени XML-файла и транспортного контейнера',
+      'подписание КЭП/УНЭП и юридически значимые статусы',
+    ],
+  }
+}
