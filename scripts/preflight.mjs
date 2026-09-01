@@ -33,19 +33,37 @@ requireSnippets('frontend gateway client', gatewayClient, [
 ])
 if (gatewayClient.includes('service_role')) fail('frontend gateway client must never use service_role')
 
-const migration = await read('supabase', 'migrations', '202609010001_init.sql')
+const initMigration = await read('supabase', 'migrations', '202609010001_init.sql')
 for (const table of ['profiles','companies','vehicles','drivers','documents','integration_requests']) {
-  if (!migration.includes(`alter table public.${table} enable row level security`)) fail(`RLS not enabled for ${table}`)
+  if (!initMigration.includes(`alter table public.${table} enable row level security`)) fail(`RLS not enabled for ${table}`)
 }
-requireSnippets('documents RLS', migration, [
+requireSnippets('documents RLS', initMigration, [
   'grant select, insert, update, delete on public.documents to authenticated',
   'create policy "documents_own" on public.documents for all using (auth.uid() = user_id) with check (auth.uid() = user_id)',
+  'create trigger documents_updated_at',
 ])
+
 const directoryMigration = await read('supabase', 'migrations', '202609010002_extend_directories_t1.sql')
 requireSnippets('T1 directory migration', directoryMigration, [
   'add column if not exists org_type', 'add column if not exists edo_id', 'add column if not exists address_region',
   'add column if not exists ownership_type', 'add column if not exists license_series', 'companies_org_type_check',
 ])
+
+const attemptsMigration = await read('supabase', 'migrations', '202609010003_operator_attempts.sql')
+requireSnippets('operator attempts migration', attemptsMigration, [
+  'create table if not exists public.operator_attempts',
+  "operation in ('generate_title','post_message')",
+  "status in ('started','succeeded','failed','blocked')",
+  'operator_attempts_unique_action unique',
+  'request_fingerprint', 'idempotency_key', 'document_revision',
+  'alter table public.operator_attempts enable row level security',
+  'create policy "operator_attempts_read_own"',
+  'grant select on public.operator_attempts to authenticated',
+  'revoke insert, update, delete on public.operator_attempts from authenticated',
+])
+if (/grant\s+(?:insert|update|delete).*operator_attempts\s+to\s+authenticated/i.test(attemptsMigration)) {
+  fail('browser/user JWT must not receive operator_attempt write grants')
+}
 
 const etrn = await read('src', 'etrn.ts')
 requireSnippets('draft-v4', etrn, [
@@ -95,16 +113,26 @@ requireSnippets('external authorization', authorization, [
 
 const canonicalMapper = await read('server', 'mappers', 'operator-candidate.mjs')
 requireSnippets('canonical mapper', canonicalMapper, [
-  'buildCanonicalOperatorCandidate', "canonicalSource: 'server-documents-row'", 'requiresServerValidation: true',
-  'clientIntegrationJsonTrusted: false', 'serverRevalidationRequired: true', 'draftModelVersion: 4',
+  'buildCanonicalOperatorCandidate', "canonicalSource: 'server-documents-row'", 'sourceRevision: text(row.updated_at)',
+  "revisionColumn: 'updated_at'", 'requiresServerValidation: true', 'clientIntegrationJsonTrusted: false',
+  'serverRevalidationRequired: true', 'draftModelVersion: 4',
 ])
+
 const repository = await read('server', 'repositories', 'supabase-documents.mjs')
 requireSnippets('Supabase RLS repository', repository, [
   'loadSupabaseDocumentWithUserToken', 'createSupabaseOwnedCandidateLoader', '/rest/v1/documents',
-  'authorization: `Bearer ${token}`', 'EPD_DATA_SUPABASE_PUBLIC_KEY', 'usesUserJwt: true', 'reliesOnRls: true',
+  'authorization: `Bearer ${token}`', 'updated_at', 'EPD_DATA_SUPABASE_PUBLIC_KEY', 'usesUserJwt: true', 'reliesOnRls: true',
   'serviceRoleRequired: false', 'canonicalCandidateMapperReady: true',
 ])
 if (repository.includes('service_role')) fail('RLS document repository must not use service_role')
+
+const idempotency = await read('server', 'idempotency.mjs')
+requireSnippets('operator idempotency', idempotency, [
+  "import { createHash } from 'node:crypto'", 'buildOperatorActionIdentity', 'requestFingerprint', 'idempotencyKey',
+  'sourceRevision', 'stableJson', 'runInFlightOnce', 'concurrentDuplicatesSharedPerProcess: true',
+  "completedPersistenceTable: 'public.operator_attempts'", 'completedPersistenceWired: false',
+])
+if (idempotency.includes('candidate.userSuppliedIdempotencyKey')) fail('client idempotency key must not be authoritative')
 
 const rateLimit = await read('server', 'rate-limit.mjs')
 requireSnippets('rate limiting', rateLimit, [
@@ -140,9 +168,11 @@ requireSnippets('Kontur generation boundary', generation, [
 const sandboxGeneration = await read('server', 'services', 'kontur-sandbox.mjs')
 requireSnippets('Kontur sandbox boundary', sandboxGeneration, [
   'validateSandboxGenerateRequest', 'generateKonturSandboxTitleForDocument', "key !== 'documentId'", 'sandbox_payload_rejected',
-  'createSupabaseOwnedCandidateLoader', 'generateAuthorizedKonturT1', "gatewayRoute: '/api/operator/kontur/generate-title-sandbox'",
-  "enabledOperatorMode: 'sandbox'", 'clientDocumentPayloadAccepted: false', 'supabaseRlsReloadRequired: true',
-  'callsPostMessage: false', 'signsDocument: false', 'sendsDocument: false',
+  'createSupabaseOwnedCandidateLoader', 'authorizeExternalOperatorDocument', 'buildOperatorActionIdentity', 'runInFlightOnce',
+  "gatewayRoute: '/api/operator/kontur/generate-title-sandbox'", "enabledOperatorMode: 'sandbox'",
+  'clientDocumentPayloadAccepted: false', 'clientIdempotencyKeyAccepted: false', 'supabaseRlsReloadRequired: true',
+  'concurrentDuplicateExternalCallsCollapsed: true', 'completedAttemptPersistenceTableReady: true',
+  'completedAttemptPersistenceWired: false', 'callsPostMessage: false', 'signsDocument: false', 'sendsDocument: false',
 ])
 
 const compose = await read('docker-compose.yml')
@@ -166,29 +196,40 @@ requireSnippets('deployment env checker', deployCheck, [
   'Production EPD_GATEWAY_AUTH_MODE must be supabase', 'EPD_DATA_SUPABASE_PUBLIC_KEY',
   'Wildcard CORS origin is forbidden', 'Potential server secret exposed through VITE_*',
   'EPD_EXTERNAL_RATE_LIMIT_MAX must not exceed EPD_RATE_LIMIT_MAX', 'EPD_KONTUR_BOX_ID',
+  'EPD_DATABASE_URL', 'EPD_BACKUP_PASSPHRASE', 'Backup passphrase must differ from database password',
+  'EPD_BACKUP_RETENTION_DAYS', 'Restore-test database must differ from EPD_DATABASE_URL',
 ])
 const deployTest = await read('scripts', 'test-deployment-env.mjs')
 requireSnippets('deployment env test', deployTest, [
   'safe production env must pass', 'wildcard CORS must fail', 'VITE secret exposure must fail',
-  'sandbox without Kontur credentials must fail', 'complete sandbox env must pass',
+  'weak backup passphrase must fail', 'backup passphrase reused as DB password must fail',
+  'restore-test DB must never equal production DB', 'sandbox without Kontur credentials must fail', 'complete sandbox env must pass',
 ])
 
 const schemaCheck = await read('scripts', 'check-fns-schema.mjs')
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 const konturSchemaCheck = await read('scripts', 'check-kontur-schemas.mjs')
 requireSnippets('Kontur schema checker', konturSchemaCheck, ['discoverKonturT1Descriptor', 'getKonturContent', 'sha256', 'UserDataXsd', 'EPD_KONTUR_BOX_ID'])
+const idempotencyTest = await read('scripts', 'test-idempotency.mjs')
+requireSnippets('idempotency test', idempotencyTest, [
+  'stableJson must ignore object key order', 'new document revision must get a new idempotency key',
+  'fingerprint must detect payload drift inside same revision', 'concurrent duplicate must execute external task once',
+])
 const sandboxTest = await read('scripts', 'test-kontur-sandbox.mjs')
 requireSnippets('Kontur sandbox test', sandboxTest, [
   'documentId-only request', 'sandbox_payload_rejected', 'Bearer user-access-token', 'public-key',
-  "pathname === '/GenerateTitleXml'", 'crossAccountExternalCall === false',
+  "pathname === '/GenerateTitleXml'", 'same-revision sandbox calls must collapse to one external request',
+  'crossAccountExternalCall === false',
 ])
 
 const pkg = JSON.parse(await read('package.json'))
 for (const script of [
-  'build','prebuild','preflight','deploy:check','deploy:env:test','audit:test','auth:test','authorization:test','repository:test','rate-limit:test',
+  'build','prebuild','preflight','deploy:check','deploy:env:test','deploy:server-day',
+  'backup:create','backup:verify','backup:restore:test',
+  'audit:test','auth:test','authorization:test','repository:test','idempotency:test','rate-limit:test',
   'gateway:test','gateway:auth:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:sandbox:test',
   'kontur:schema:check','kontur:schema:save','fns:schema:check',
 ]) if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
 if (pkg.dependencies?.jose !== '6.2.10') fail('root jose dependency must stay pinned to tested version 6.2.10')
 
-console.log(`Preflight OK: ${parts.length} source parts, deployment env policy, JWT/JWKS auth, RLS ownership repository, canonical mapping, sandbox GenerateTitle boundary, rate limits, privacy audit, Docker gateway and fail-closed PostMessage/send verified`)
+console.log(`Preflight OK: ${parts.length} source parts, 3 migrations, encrypted deployment policy, JWT/JWKS auth, RLS canonical reads, operator idempotency, sandbox GenerateTitle, rate limits, privacy audit and fail-closed PostMessage/send verified`)
