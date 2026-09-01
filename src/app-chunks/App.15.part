@@ -1,0 +1,7 @@
+
+function Wizard({doc,companies,vehicles,drivers,onSaved,onDirectoriesChanged}:{doc:DocumentRow,companies:Company[],vehicles:Vehicle[],drivers:Driver[],onSaved:(d:DocumentRow)=>void,onDirectoriesChanged:()=>Promise<void>}){const [d,setD]=useState(doc);const [step,setStep]=useState(1);const [saving,setSaving]=useState(false);const [saved,setSaved]=useState('Сохранено');const timer=useRef<any>(null);const issues=validateEtrn(d.data);const required=issues.filter(x=>x.kind==='required');const recommended=issues.filter(x=>x.kind==='recommended');
+  const change=(data:EtrnData)=>{const n={...d,data,status:(isReady(data)?(d.status==='ready'?'ready':'draft'):'incomplete') as DocumentRow['status']};setD(n);setSaved('Есть изменения');clearTimeout(timer.current);timer.current=setTimeout(()=>persist(n),700)}
+  const persist=async(x=d)=>{setSaving(true);const n=await saveDocument(x);setD(n);onSaved(n);setSaving(false);setSaved('Сохранено')}
+  useEffect(()=>()=>clearTimeout(timer.current),[])
+  const markReady=async()=>{if(!isReady(d.data))return;const n={...d,status:'ready' as const};await persist(n);setD(n)}
+  const addCargo=()=>change({...d.data,cargo:[...d.data.cargo,emptyCargo()]})

@@ -1,0 +1,1 @@
+  const createCargoDoc=async()=>{const d=newDoc();d.data.cargo=cargoRows.map(r=>({id:uid(),name:r.name,places:r.places||'',unit:r.unit||'шт',weight:r.weight||'',value:r.value||'',packaging:r.packaging||'',conditions:r.conditions||''}));d.status='incomplete';const saved=await saveDocument(d);onDocCreated(saved);setCargoRows([]);go(`/app/documents/${saved.id}/edit`)}

@@ -1,0 +1,8 @@
+    else if(pathname==='/app/import')content=<ImportPage reloadCompanies={reloadCompanies} onDocCreated={(x)=>setDocs(a=>[x,...a.filter(z=>z.id!==x.id)])}/>
+    else if(pathname==='/app/integrations')content=<Integrations profile={profile}/>
+    else if(pathname==='/app/onboarding')content=<Onboarding profile={profile} onDone={setProfileState}/>
+    else content=<Card><h2>Страница не найдена</h2></Card>
+    return <AppShell email={email} onSignout={logout}>{content}<Toast text={toast}/></AppShell>
+  }
+  return <PublicShell><section className="section"><div className="container center"><h1>404</h1><p>Страница не найдена.</p><Button onClick={()=>go('/')}>На главную</Button></div></section></PublicShell>
+}

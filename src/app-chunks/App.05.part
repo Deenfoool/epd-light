@@ -1,0 +1,4 @@
+  <section className="section alt"><div className="container"><h2>Как это работает</h2><div className="three-grid">{[[FileText,'Заполнить','Мастер из 6 шагов и справочники.'],[ClipboardCheck,'Проверить','Покажем обязательные и рекомендуемые поля.'],[Send,'Передать оператору','Подготовьте JSON и передайте через подключённого оператора.']].map(([I,t,d]:any)=><Card key={t}><I className="feature-icon"/><h3>{t}</h3><p>{d}</p></Card>)}</div></div></section>
+  <section className="section"><div className="container"><h2>Что входит в MVP</h2><div className="three-grid">{[[Database,'Справочники'],[Copy,'Дублирование'],[Import,'CSV-импорт'],[FileJson,'JSON-экспорт'],[Printer,'Печатное превью'],[ShieldAlert,'Контроль статусов']].map(([I,t]:any)=><Card key={t}><I className="feature-icon"/><h3>{t}</h3></Card>)}</div></div></section>
+</PublicShell>}
+
