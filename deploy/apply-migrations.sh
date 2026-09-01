@@ -43,20 +43,26 @@ checksum() {
   fi
 }
 
+# Pass the secret URL by inherited environment name only. Inside the container
+# libpq receives it through PGDATABASE, so the URL is not placed in psql argv.
+export EPD_DATABASE_URL="$DB_URL"
+
 psql_exec() {
   docker run --rm \
-    -e EPD_DATABASE_URL="$DB_URL" \
+    -e EPD_DATABASE_URL \
     "$POSTGRES_IMAGE" \
-    psql "$DB_URL" -X -v ON_ERROR_STOP=1 "$@"
+    sh -eu -c 'PGDATABASE="$EPD_DATABASE_URL" exec psql -X -v ON_ERROR_STOP=1 "$@"' sh "$@"
 }
 
 psql_file() {
   rel="$1"
+  export EPD_MIGRATION_FILE="$rel"
   docker run --rm \
-    -e EPD_DATABASE_URL="$DB_URL" \
+    -e EPD_DATABASE_URL \
+    -e EPD_MIGRATION_FILE \
     -v "$ROOT_DIR:/app:ro" \
     "$POSTGRES_IMAGE" \
-    psql "$DB_URL" -X -v ON_ERROR_STOP=1 --single-transaction -f "/app/$rel"
+    sh -eu -c 'PGDATABASE="$EPD_DATABASE_URL" exec psql -X -v ON_ERROR_STOP=1 --single-transaction -f "/app/$EPD_MIGRATION_FILE"'
 }
 
 FILES="$(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name '*.sql' -print | sort)"
@@ -65,11 +71,9 @@ if [ -z "$FILES" ]; then
   exit 1
 fi
 
-# A verified encrypted backup is mandatory before touching schema state.
 echo "== Pre-migration encrypted backup =="
 sh "$ROOT_DIR/deploy/backup-postgres.sh"
 
-# Internal migration registry is not exposed to browser roles.
 psql_exec -q -c "
 create table if not exists public.epd_light_schema_migrations (
   version text primary key,
@@ -87,8 +91,7 @@ for file in $FILES; do
   esac
   hash="$(checksum "$file")"
   case "$hash" in
-    [0-9a-f][0-9a-f]*) ;;
-    *) echo "ERROR: failed to calculate SHA-256 for $version" >&2; exit 1 ;;
+    ''|*[!0-9a-f]*) echo "ERROR: failed to calculate SHA-256 for $version" >&2; exit 1 ;;
   esac
   if [ "${#hash}" -ne 64 ]; then
     echo "ERROR: invalid SHA-256 length for $version" >&2
