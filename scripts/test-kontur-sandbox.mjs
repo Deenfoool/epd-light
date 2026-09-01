@@ -53,12 +53,15 @@ Object.defineProperty(auth, 'accessToken', { value: 'user-access-token', enumera
 
 let repositoryRequest
 let konturRequest
-const result = await generateKonturSandboxTitleForDocument({
+const baseArgs = {
   auth,
   documentId,
   repositoryConfig: { baseUrl: 'https://supabase.test', publicApiKey: 'public-key' },
   konturConfig: { boxId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', accessToken: 'operator-secret' },
   konturBaseUrl: 'https://kontur.test',
+}
+const result = await generateKonturSandboxTitleForDocument({
+  ...baseArgs,
   repositoryFetchImpl: async (url, init) => {
     repositoryRequest = { url: String(url), init }
     return new Response(JSON.stringify([row]), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -82,15 +85,37 @@ assert(konturRequest.init.headers.authorization === 'Bearer operator-secret', 'o
 assert(konturRequest.init.body.includes('Number="ЭТрН-SBX-1"'), 'GenerateTitleXml must use canonical row data')
 assert(result.generatedXml.includes('ВерсФорм="5.01"'), 'generated title must be returned')
 assert(result.signed === false && result.sent === false, 'sandbox generation must not claim signing/sending')
+assert(/^[0-9a-f]{64}$/.test(result.idempotency?.idempotencyKey || ''), 'sandbox result must expose safe sha256 idempotency key')
+assert(/^[0-9a-f]{64}$/.test(result.idempotency?.requestFingerprint || ''), 'sandbox result must expose safe request fingerprint')
+assert(result.idempotency?.sourceRevision === row.updated_at, 'idempotency must bind to canonical documents.updated_at')
+assert(result.idempotency?.completedPersistenceWired === false, 'completed-attempt persistence must not be claimed yet')
+
+let concurrentExternalCalls = 0
+let releaseConcurrent
+const concurrentGate = new Promise((resolve) => { releaseConcurrent = resolve })
+const concurrentArgs = {
+  ...baseArgs,
+  repositoryFetchImpl: async () => new Response(JSON.stringify([row]), { status: 200, headers: { 'content-type': 'application/json' } }),
+  konturFetchImpl: async () => {
+    concurrentExternalCalls += 1
+    await concurrentGate
+    return new Response('<Файл ВерсФорм="5.01"/>', { status: 200, headers: { 'content-type': 'application/xml' } })
+  },
+}
+const concurrentA = generateKonturSandboxTitleForDocument(concurrentArgs)
+const concurrentB = generateKonturSandboxTitleForDocument(concurrentArgs)
+await new Promise((resolve) => setTimeout(resolve, 0))
+assert(concurrentExternalCalls === 1, 'concurrent same-revision sandbox calls must collapse to one external request')
+releaseConcurrent()
+const concurrentResults = await Promise.all([concurrentA, concurrentB])
+assert(concurrentResults.filter((x) => x.idempotency.sharedInFlight).length === 1, 'one concurrent caller must share the in-flight external result')
+assert(concurrentResults[0].idempotency.idempotencyKey === concurrentResults[1].idempotency.idempotencyKey, 'concurrent callers must use the same action identity')
 
 let crossAccountExternalCall = false
 let crossAccountHidden = false
 try {
   await generateKonturSandboxTitleForDocument({
-    auth,
-    documentId,
-    repositoryConfig: { baseUrl: 'https://supabase.test', publicApiKey: 'public-key' },
-    konturConfig: { boxId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', accessToken: 'operator-secret' },
+    ...baseArgs,
     repositoryFetchImpl: async () => new Response(JSON.stringify([{ ...row, user_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }]), { status: 200 }),
     konturFetchImpl: async () => { crossAccountExternalCall = true; return new Response('<x/>', { status: 200 }) },
   })
@@ -101,4 +126,4 @@ assert(crossAccountHidden, 'cross-account document must be hidden as unavailable
 assert(crossAccountExternalCall === false, 'cross-account document must fail before Kontur request')
 assert(JSON.stringify(auth).includes('user-access-token') === false, 'verified user token must stay non-enumerable')
 
-console.log('Kontur sandbox test OK: documentId-only request, JWT/RLS canonical reload, ownership and GenerateTitleXml boundary verified')
+console.log('Kontur sandbox test OK: documentId-only JWT/RLS flow, revision idempotency, concurrent dedupe and ownership verified')
