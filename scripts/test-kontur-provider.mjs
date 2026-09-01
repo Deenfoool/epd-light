@@ -33,6 +33,8 @@ const emptyStatus = konturConfigStatus({ boxId: '', accessToken: '' })
 assert(emptyStatus.configured === false && emptyStatus.missing.length === 2, 'empty config must be rejected')
 const caps = konturPublicCapabilities({ boxId: 'box', accessToken: 'secret' })
 assert(caps.credentialsConfigured === true, 'configured capability must be detected')
+assert(caps.userDataPreviewWiredToGateway === true, 'local UserData preview should be gateway-wired')
+assert(caps.userDataPreviewExternalCall === false, 'UserData preview must remain local-only')
 assert(caps.generateTitleWiredToGateway === false, 'GenerateTitleXml must not be gateway-wired')
 assert(caps.sendWiredToGateway === false, 'send must not be gateway-wired')
 assert(!JSON.stringify(caps).includes('secret'), 'public capabilities must never expose token')
@@ -75,4 +77,4 @@ try {
 }
 assert(missingTokenFailed, 'missing access token must fail before network request')
 
-console.log('Kontur provider offline test OK: contract, URLs, Bearer auth and fail-closed gateway wiring verified')
+console.log('Kontur provider offline test OK: contract, URLs, Bearer auth, local preview and fail-closed external wiring verified')
