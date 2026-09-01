@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "preflight": "node scripts/preflight.mjs",
+    "preflight": "node scripts/preflight-deploy.mjs && node scripts/preflight.mjs",
     "deploy:check": "node scripts/check-deployment-env.mjs",
     "deploy:env:test": "node scripts/test-deployment-env.mjs",
     "audit:test": "node scripts/test-audit.mjs",
