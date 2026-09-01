@@ -32,7 +32,7 @@ const config = assertGatewayAuthConfig(gatewayAuthConfigFromEnv({
 }), 'disabled')
 
 const sign = ({ role = 'authenticated', audience = 'authenticated', clientId = '' } = {}) => {
-  let jwt = new SignJWT({ role, ...(clientId ? { client_id: clientId } : {}) })
+  const jwt = new SignJWT({ role, ...(clientId ? { client_id: clientId } : {}) })
     .setProtectedHeader({ alg: 'RS256', kid: 'epd-test-key', typ: 'JWT' })
     .setIssuer(issuer)
     .setAudience(audience)
@@ -48,7 +48,9 @@ try {
   assert(valid.ok === true, 'valid RS256 Supabase-style JWT must authenticate')
   assert(valid.subject === 'user-123', 'JWT subject not returned')
   assert(valid.role === 'authenticated', 'authenticated role not returned')
-  assert(JSON.stringify(valid).includes(validToken) === false, 'auth result must never echo bearer token')
+  assert(valid.accessToken === validToken, 'verified token must be available to server RLS repository')
+  assert(Object.keys(valid).includes('accessToken') === false, 'verified access token must be non-enumerable')
+  assert(JSON.stringify(valid).includes(validToken) === false, 'auth result must never serialize bearer token')
 
   const missing = await authenticateGatewayRequest({ headers: {} }, config)
   assert(missing.ok === false && missing.status === 401 && missing.error === 'auth_required', 'missing bearer token must return auth_required')
@@ -76,7 +78,7 @@ try {
   assert(config.jwksUrl.endsWith('/auth/v1/.well-known/jwks.json'), 'wrong Supabase JWKS path')
   assert(config.algorithms.includes('RS256') && config.algorithms.includes('ES256'), 'asymmetric algorithm allow-list missing')
 
-  console.log('Gateway auth test OK: local JWKS, RS256 signature, iss/aud/role/client checks and fail-closed operator mode verified')
+  console.log('Gateway auth test OK: local JWKS, RS256 signature, iss/aud/role/client and non-serializable RLS token verified')
 } finally {
   await new Promise((resolve) => jwksServer.close(resolve))
 }
