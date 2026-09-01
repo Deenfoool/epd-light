@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "preflight": "node scripts/preflight.mjs",
+    "audit:test": "node scripts/test-audit.mjs",
     "gateway:test": "node scripts/test-gateway.mjs",
     "kontur:provider:test": "node scripts/test-kontur-provider.mjs",
     "kontur:userdata:test": "node scripts/test-kontur-userdata.mjs",
