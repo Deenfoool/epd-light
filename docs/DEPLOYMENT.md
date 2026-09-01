@@ -2,11 +2,11 @@
 
 ## Режимы
 
-Проект сейчас поддерживает три разных режима, которые нельзя смешивать:
+Проект поддерживает три разных режима:
 
 1. **Demo** — localStorage/GitHub Pages, без backend и реальных документов.
-2. **Cloud app** — Auth + PostgreSQL/Supabase + private gateway, но operator mode `disabled`.
-3. **Kontur sandbox** — тот же cloud app, но gateway дополнительно может выполнить `GenerateTitleXml`. Подписание и `PostMessage` всё равно запрещены.
+2. **Cloud app** — Auth + PostgreSQL/Supabase + private gateway, operator mode `disabled`.
+3. **Kontur sandbox** — cloud app + реальный `GenerateTitleXml`. Подписание и `PostMessage` всё равно запрещены.
 
 ## 1. Demo
 
@@ -16,13 +16,11 @@ npm run preflight
 npm run dev
 ```
 
-Без Supabase env данные остаются в браузере.
-
-Публичный GitHub Pages стенд нужен только для UI-демонстрации и не является production-контуром.
+Без Supabase env данные остаются в браузере. GitHub Pages — только UI-стенд.
 
 ## 2. Production data/auth prerequisites
 
-Перед запуском cloud app нужны:
+Перед cloud-запуском:
 
 ```env
 VITE_SUPABASE_URL=https://YOUR_DATA_HOST
@@ -36,7 +34,7 @@ EPD_DATA_SUPABASE_URL=https://YOUR_DATA_HOST
 EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_KEY
 ```
 
-Frontend key и Data API key должны быть публичным anon/publishable key, **не `service_role`**.
+Frontend key и Data API key — публичный anon/publishable key, **не `service_role`**.
 
 Примените миграции:
 
@@ -51,17 +49,15 @@ RLS `documents_own` должна оставаться активной:
 auth.uid() = user_id
 ```
 
-Backend sandbox flow специально читает документ через Data API под пользовательским JWT, чтобы эта RLS оставалась авторитетной.
+Sandbox flow читает документ через Data API под пользовательским JWT, чтобы эта RLS оставалась авторитетной.
 
-## 3. Production env-check до Docker
-
-Скопируйте пример:
+## 3. Production env-check
 
 ```bash
 cp .env.example .env.production
 ```
 
-Заполните значения и выполните:
+После заполнения:
 
 ```bash
 set -a
@@ -70,112 +66,144 @@ set +a
 npm run deploy:check
 ```
 
-Checker останавливает запуск при типичных опасных настройках:
+Checker останавливает запуск при опасных настройках:
 
 - gateway auth не `supabase`;
-- HTTP URL вместо HTTPS;
-- отсутствующий Data API public key;
+- HTTP вместо HTTPS;
+- пустой Data API public key;
 - `service_role` вместо public key;
 - wildcard CORS;
 - подозрительный секрет в `VITE_*`;
 - внешний rate limit выше обычного;
 - sandbox без Kontur BoxId/token.
 
-Сам checker не печатает значения секретов.
+Checker не выводит значения секретов.
+
+Правила checker отдельно покрыты:
+
+```bash
+npm run deploy:env:test
+```
 
 ## 4. Docker Compose
 
-Сборка и запуск:
+Compose по умолчанию публикует web **только на loopback**:
+
+```text
+127.0.0.1:8080 -> web container
+```
+
+Gateway `8787` вообще не публикуется наружу.
+
+Ручной запуск:
 
 ```bash
 docker compose --env-file .env.production up -d --build
 ```
 
-Проверить контейнеры:
+Проверка:
 
 ```bash
 docker compose ps
-```
-
-Проверить frontend/nginx:
-
-```bash
 curl -i http://127.0.0.1:8080/healthz
-```
-
-Проверить gateway через nginx:
-
-```bash
 curl -s http://127.0.0.1:8080/api/operator/capabilities
 ```
 
-Порт gateway `8787` не публикуется наружу.
-
-До намеренного sandbox-теста используйте:
+До sandbox используйте:
 
 ```env
 EPD_OPERATOR_PROVIDER=none
 EPD_OPERATOR_MODE=disabled
 ```
 
-Внешняя отправка при этом и в sandbox остаётся:
+`externalSendEnabled` должен оставаться `false` всегда, пока production send не реализован отдельно.
 
-```json
-{
-  "externalSendEnabled": false
-}
+## 5. Server-day helper
+
+Когда на сервере уже установлены Docker и Docker Compose plugin, можно запустить весь безопасный pre-deploy pipeline одной командой:
+
+```bash
+bash deploy/server-day.sh .env.production
 ```
 
-## 5. HTTPS и внешний reverse proxy
+Скрипт:
 
-Пользовательский домен должен открываться только по HTTPS.
+1. проверяет наличие Docker/Compose;
+2. запускает `deploy:check` в чистом Node 22 container;
+3. запускает offline preflight/security tests;
+4. проверяет `docker compose config`;
+5. собирает образы;
+6. поднимает containers;
+7. ждёт `/healthz`;
+8. читает `/api/operator/capabilities`;
+9. аварийно останавливается, если gateway перестал сообщать `externalSendEnabled=false`.
 
-Целевая схема:
+Скрипт **не устанавливает Docker**, не изменяет firewall и не настраивает DNS — эти действия зависят от конкретного VPS/ОС.
+
+## 6. HTTPS reverse proxy
+
+Публичный трафик должен идти только по HTTPS:
 
 ```text
 Internet
-  -> :443 reverse proxy / TLS
+  -> :443 TLS reverse proxy
   -> 127.0.0.1:8080 project nginx
   -> frontend or /api/*
   -> private gateway:8787
 ```
 
-Не публикуйте `8787` в firewall/security group.
+В репозитории есть пример:
 
-`EPD_ALLOWED_ORIGINS` должен содержать точные HTTPS origins, например:
+```text
+deploy/Caddyfile.example
+```
+
+Для Caddy:
+
+1. скопируйте пример в системный Caddyfile;
+2. замените `epd.example.ru` на реальный домен;
+3. направьте DNS A/AAAA на VPS;
+4. откройте наружу только необходимые `80/443`;
+5. оставьте project `8080` на loopback;
+6. gateway `8787` наружу не открывайте.
+
+Caddy может автоматически получить/обновлять TLS certificate после корректной настройки DNS.
+
+`EPD_ALLOWED_ORIGINS` задаётся точным HTTPS origin:
 
 ```env
 EPD_ALLOWED_ORIGINS=https://epd.example.ru
 ```
 
-Не используйте `*`.
+`*` запрещён deployment checker.
 
-После выбора production-домена добавьте его в разрешённые redirect URLs Supabase Auth.
+После выбора production-домена добавьте его в Supabase Auth redirect URLs.
 
-## 6. Auth smoke test
+## 7. Auth/RLS smoke test
 
-Проверьте двумя отдельными тестовыми аккаунтами:
+Двумя тестовыми аккаунтами:
 
-1. пользователь A создаёт документ;
-2. пользователь B не видит документ A в приложении;
-3. прямой Data API запрос B к ID документа A не возвращает строку;
-4. operator gateway запрос без Bearer token получает `401`;
-5. operator gateway запрос с валидным JWT работает в рамках лимитов.
+1. A создаёт документ;
+2. B не видит документ A;
+3. Data API под JWT B не возвращает строку документа A по известному ID;
+4. operator gateway без Bearer получает `401`;
+5. валидный JWT работает;
+6. чужой documentId для sandbox внешнего действия возвращается как недоступный и не приводит к вызову оператора.
 
-Нельзя считать только frontend-фильтрацию проверкой разграничения доступа — нужна именно RLS.
+Frontend-фильтрация не считается разграничением доступа: проверяется именно RLS.
 
-## 7. Local UserDataXml preview
+## 8. Local UserDataXml preview
 
-При `EPD_OPERATOR_MODE=disabled` можно тестировать:
+В `operatorMode=disabled` доступны:
 
 ```text
 POST /api/operator/preflight
 POST /api/operator/kontur/userdata-preview
 ```
 
-Эти endpoints не делают внешних operator-вызовов.
+Это локальные проверки без внешнего operator API.
 
-## 8. Проверка схем
+## 9. Проверка схем
 
 ФНС:
 
@@ -187,19 +215,14 @@ npm run fns:schema:check
 
 ```bash
 npm run kontur:schema:check
-```
-
-Для сохранения XSD/UserDataXsd в игнорируемый cache:
-
-```bash
 npm run kontur:schema:save
 ```
 
-Изменение версии/хэша схемы не должно автоматически менять mapping. Сначала ручная проверка.
+Изменение версии/хэша не переключает mapping автоматически.
 
-## 9. Намеренное включение Kontur sandbox
+## 10. Намеренное включение Kontur sandbox
 
-Только после успешных auth/RLS/schema проверок измените server env:
+Только после auth/RLS/schema проверок:
 
 ```env
 EPD_OPERATOR_PROVIDER=kontur
@@ -210,62 +233,63 @@ EPD_KONTUR_ACCESS_TOKEN=...
 EPD_EXTERNAL_RATE_LIMIT_MAX=10
 ```
 
-Повторно:
+Затем:
 
 ```bash
 npm run deploy:check
 docker compose --env-file .env.production up -d --build
 ```
 
-В `/api/operator/capabilities` должно появиться:
+В capabilities:
 
 ```text
 sandboxGenerateTitle.enabled = true
 sandboxGenerateTitle.ready   = true
 ```
 
-После этого на карточке документа появляется `Kontur sandbox`.
+На карточке документа появится `Kontur sandbox`.
 
 Кнопка:
 
-1. показывает явное подтверждение;
+1. показывает отдельное подтверждение;
 2. отправляет gateway только `documentId`;
 3. gateway проверяет JWT;
-4. перечитывает document row через Supabase RLS;
+4. перечитывает document row через RLS;
 5. заново строит canonical candidate;
-6. вызывает `GenerateTitleXml`;
-7. возвращает XML;
-8. **не подписывает**;
-9. **не вызывает `PostMessage`**.
+6. повторно проверяет владельца;
+7. вызывает `GenerateTitleXml`;
+8. возвращает XML;
+9. **не подписывает**;
+10. **не вызывает `PostMessage`**.
 
-## 10. Что нельзя включать даже в sandbox
+## 11. Запрещено даже в sandbox
 
-- `POST /api/operator/send`;
+- production `/api/operator/send`;
 - `PostMessage`;
-- автоматическое присвоение статуса «отправлен»;
-- signing flow без отдельной реализации;
+- автоматический статус «отправлен»;
+- signing без отдельной реализации;
 - `service_role` для обхода пользовательской RLS;
-- operator access token в `VITE_*`;
+- operator token в `VITE_*`;
 - полный XML/JSON документа в application logs.
 
-## 11. Backup и recovery
+## 12. Backup/recovery
 
-До первых реальных клиентов обязательно:
+До первых реальных клиентов:
 
 - ежедневный backup PostgreSQL;
-- отдельное хранение backup от основного VPS;
+- копия вне основного VPS;
 - шифрование backup;
-- тест восстановления на отдельной БД;
+- тест восстановления;
 - документированный RPO/RTO;
-- backup env/secrets через отдельное защищённое хранилище, не Git.
+- защищённый backup secrets/env вне Git.
 
-## 12. Минимальный server-day checklist
+## 13. Server-day checklist
 
 Перед открытием домена:
 
 - [ ] `npm run preflight`;
 - [ ] `npm run deploy:env:test`;
-- [ ] `npm run deploy:check` с production env;
+- [ ] `npm run deploy:check`;
 - [ ] `npm run audit:test`;
 - [ ] `npm run authorization:test`;
 - [ ] `npm run repository:test`;
@@ -279,14 +303,15 @@ sandboxGenerateTitle.ready   = true
 - [ ] `npm run build`;
 - [ ] обе SQL-миграции применены;
 - [ ] RLS проверена двумя аккаунтами;
-- [ ] HTTPS работает;
-- [ ] Auth redirect URL ограничены доменом;
+- [ ] web container доступен только через `127.0.0.1:8080`;
+- [ ] HTTPS работает на production domain;
+- [ ] Supabase Auth redirect URLs ограничены доменом;
 - [ ] `EPD_ALLOWED_ORIGINS` содержит только нужный HTTPS origin;
-- [ ] порт gateway не открыт наружу;
-- [ ] backup создан и тест восстановления запланирован;
+- [ ] firewall не публикует `8080/8787`;
+- [ ] backup и recovery проверены;
 - [ ] `externalSendEnabled=false`;
-- [ ] production `PostMessage` отсутствует.
+- [ ] `PostMessage` отсутствует.
 
 ## Контур данных РФ
 
-Production-размещение базы, backend, логов, backup и обработку персональных данных нужно строить с учётом применимых требований российского законодательства и фактического состава данных. Для проекта планируется российский production-контур; зарубежный demo/development backend не следует автоматически считать подходящим для реальных персональных данных.
+Production-размещение базы, backend, логов и backups нужно строить с учётом применимых требований российского законодательства и фактического состава персональных данных. Для проекта целевой production-контур планируется в РФ; demo/development инфраструктуру нельзя автоматически использовать для реальных персональных данных.
