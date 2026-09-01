@@ -41,10 +41,11 @@ export function buildOperatorDraft(doc: DocumentRow) {
   const d = normalizeEtrn(doc.data)
   const readiness = operatorReadiness(d)
   const totals = cargoTotals(d)
+  const loading = d.loadingDetails!
 
   return {
     kind: 'epd-light/operator-candidate-v1',
-    draftModelVersion: 3,
+    draftModelVersion: 4,
     disclaimer: 'Интеграционный черновик. Не является XML ФНС, ЭТрН, подписью или фактом передачи в ГИС ЭПД.',
     mappingReference: {
       ...FNS_ETRN_REFERENCE,
@@ -96,6 +97,15 @@ export function buildOperatorDraft(doc: DocumentRow) {
       actualPlaces: d.route.actualPlaces || String(totals.places || ''),
       massDeterminationMethod: d.route.massMethod ?? '',
     },
+    loadingDetails: {
+      matchingShipper: loading.matchingShipper,
+      employeeFullName: loading.employeeFullName,
+      employeePosition: loading.employeePosition,
+      employeeResponsibilities: loading.employeeResponsibilities,
+      partyInn: loading.partyInn || (loading.matchingShipper === '1' ? d.shipper.inn : ''),
+      ownerType: loading.ownerType,
+      ownerInn: loading.ownerInn,
+    },
     cargo: d.cargo.map((x) => ({
       internalId: x.id,
       name: x.name,
@@ -145,8 +155,8 @@ export function buildOperatorDraft(doc: DocumentRow) {
       extra: d.terms.extra,
     },
     unresolvedByDesign: [
-      'полные перечисления OrgType/Ownership/WeighingMethod/ContainerType и условная обязательность берутся из актуального UserDataXsd/GetDocumentTypes',
-      'LoadingPartyDetails и LoadingOwnerDetails присутствуют в публичном примере T1, но не генерируются до проверки обязательности и бизнес-смысла по актуальному UserDataXsd',
+      'полные перечисления OrgType/Ownership/WeighingMethod/ContainerType/LoadingOwnerDetails.Type и условная обязательность берутся из актуального UserDataXsd/GetDocumentTypes',
+      'LoadingPartyDetails и LoadingOwnerDetails генерируются только при явно заполненных пользователем данных; отсутствие этих блоков пока не трактуется как XSD-ошибка',
       'datetime-local не содержит часовой пояс; текущий preview использует EnablingTimeZone=0 и не должен идти в GenerateTitleXml до sandbox-проверки',
       'ИП и иные типы участников должны быть проверены по актуальному UserDataXsd до генерации',
       'формирование имени итогового XML и транспортного контейнера',
