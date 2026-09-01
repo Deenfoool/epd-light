@@ -52,6 +52,7 @@ const requiredSnippets = [
   '/api/operator/kontur/userdata-preview',
   'Kontur XML preview',
   'Supabase access token',
+  'backend repository',
   'Gateway online',
 ]
 for (const snippet of requiredSnippets) if (!app.includes(snippet)) fail(`missing app invariant: ${snippet}`)
@@ -84,12 +85,12 @@ for (const snippet of ['FNS_ETRN_REFERENCE', "knd: '1110339'", "formatVersion: '
 }
 
 const operatorDraft = await readFile(path.join(root, 'src', 'operator-draft.ts'), 'utf8')
-for (const snippet of ['epd-light/operator-candidate-v1', 'draftModelVersion: 4', 'loadingRussianAddress', 'unloadingRussianAddress', 'loadingDetails:', 'не является XML ФНС', 'unresolvedByDesign']) {
+for (const snippet of ['epd-light/operator-candidate-v1', 'draftModelVersion: 4', 'internalId: doc.id', 'loadingRussianAddress', 'unloadingRussianAddress', 'loadingDetails:', 'браузерский payload не является авторитетным', 'не является XML ФНС', 'unresolvedByDesign']) {
   if (!operatorDraft.includes(snippet)) fail(`operator draft invariant missing: ${snippet}`)
 }
 
 const gateway = await readFile(path.join(root, 'server', 'index.mjs'), 'utf8')
-for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'", "url.pathname === '/api/operator/kontur/userdata-preview'", "url.pathname === '/api/operator/send'", "url.pathname.startsWith('/api/operator/')", 'authenticateGatewayRequest', 'consumeRateLimit', 'rateLimitHeaders', 'externalSendEnabled: false', 'externalCallMade: false', "error: 'operator_send_disabled'", 'writeGatewayAudit', 'path: url.pathname']) {
+for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'", "url.pathname === '/api/operator/kontur/userdata-preview'", "url.pathname === '/api/operator/send'", "url.pathname.startsWith('/api/operator/')", 'authenticateGatewayRequest', 'EXTERNAL_OPERATOR_AUTHORIZATION_POLICY', 'consumeRateLimit', 'rateLimitHeaders', 'externalSendEnabled: false', 'externalCallMade: false', "error: 'operator_send_disabled'", 'writeGatewayAudit', 'path: url.pathname']) {
   if (!gateway.includes(snippet)) fail(`gateway auth/fail-closed/audit invariant missing: ${snippet}`)
 }
 if (gateway.includes('/api/operator/kontur/generate-title')) fail('GenerateTitleXml must not be exposed as a gateway route')
@@ -102,6 +103,11 @@ for (const snippet of ['createRemoteJWKSet', 'jwtVerify', '/auth/v1/.well-known/
 }
 for (const forbidden of ['JWT_SECRET', 'service_role', 'console.log(token)', 'console.log(payload)']) {
   if (auth.includes(forbidden)) fail(`gateway auth contains forbidden secret/logging pattern: ${forbidden}`)
+}
+
+const authorization = await readFile(path.join(root, 'server', 'authorization.mjs'), 'utf8')
+for (const snippet of ['authorizeExternalOperatorDocument', 'ownerSubject', "error: 'document_not_available'", "error: 'document_identity_mismatch'", 'serverLoadedDocumentRequired: true', 'ownershipMatchRequired: true', 'clientPayloadAuthoritative: false', 'backendDocumentRepositoryReady: false']) {
+  if (!authorization.includes(snippet)) fail(`external authorization invariant missing: ${snippet}`)
 }
 
 const rateLimit = await readFile(path.join(root, 'server', 'rate-limit.mjs'), 'utf8')
@@ -128,7 +134,7 @@ for (const snippet of ['validateKonturT1Candidate', 'buildKonturT1UserDataXml', 
 }
 
 const generationBoundary = await readFile(path.join(root, 'server', 'services', 'kontur-title.mjs'), 'utf8')
-for (const snippet of ['generateKonturT1FromCandidate', 'generateKonturT1Xml', 'gatewayRouteExposed: false', 'callsPostMessage: false', 'signed: false', 'sent: false']) {
+for (const snippet of ['generateKonturT1FromCandidate', 'generateAuthorizedKonturT1', 'authorizeExternalOperatorDocument', 'serverLoadedDocumentRequiredForGateway: true', 'clientPayloadAuthoritative: false', 'generateKonturT1Xml', 'gatewayRouteExposed: false', 'callsPostMessage: false', 'signed: false', 'sent: false']) {
   if (!generationBoundary.includes(snippet)) fail(`Kontur generation boundary invariant missing: ${snippet}`)
 }
 
@@ -165,9 +171,9 @@ const schemaCheck = await readFile(path.join(root, 'scripts', 'check-fns-schema.
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-for (const script of ['build','prebuild','preflight','audit:test','auth:test','rate-limit:test','gateway:test','gateway:auth:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:schema:check','kontur:schema:save','fns:schema:check']) {
+for (const script of ['build','prebuild','preflight','audit:test','auth:test','authorization:test','rate-limit:test','gateway:test','gateway:auth:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:schema:check','kontur:schema:save','fns:schema:check']) {
   if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
 }
 if (pkg.dependencies?.jose !== '6.2.10') fail('root jose dependency must stay pinned to tested version 6.2.10')
 
-console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, JWT auth, rate limiting, privacy-safe audit, Docker gateway, draft-v4 and Kontur boundaries verified`)
+console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, JWT auth, ownership authorization, rate limiting, privacy-safe audit, Docker gateway, draft-v4 and Kontur boundaries verified`)
