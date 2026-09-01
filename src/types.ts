@@ -9,6 +9,8 @@ export type Party = {
   phone: string
   email: string
   address: string
+  /** Идентификатор участника ЭДО у выбранного оператора. Не обязателен до интеграции. */
+  edoId?: string
 }
 
 export type CargoItem = {
@@ -20,6 +22,12 @@ export type CargoItem = {
   value: string
   packaging: string
   conditions: string
+  /** Дополнительные поля для подготовки маппинга на титул Т1 ЭТрН. */
+  state?: string
+  marking?: string
+  packagingMethod?: string
+  packagingCode?: string
+  currency?: string
 }
 
 export type EtrnData = {
@@ -34,6 +42,12 @@ export type EtrnData = {
     unloadDate: string
     unloadTime: string
     note: string
+    /** Фактические данные погрузки, если они уже известны к моменту подготовки Т1. */
+    loadArrival?: string
+    loadDeparture?: string
+    massMethod?: string
+    actualWeight?: string
+    actualPlaces?: string
   }
   cargo: CargoItem[]
   transport: {
@@ -44,6 +58,15 @@ export type EtrnData = {
     driverName: string
     driverPhone: string
     driverLicense: string
+    vehicleType?: string
+    ownershipType?: string
+    loadCapacity?: string
+    volumeCapacity?: string
+    driverLicenseSeries?: string
+    driverLicenseNumber?: string
+    driverLicenseDate?: string
+    waybillNumber?: string
+    waybillDate?: string
   }
   terms: {
     contractNumber: string
@@ -51,6 +74,14 @@ export type EtrnData = {
     price: string
     comment: string
     extra: string
+    orderNumber?: string
+    orderDate?: string
+    shipperInstructions?: string
+    redirectionContact?: string
+  }
+  signer?: {
+    fullName: string
+    position: string
   }
 }
 
