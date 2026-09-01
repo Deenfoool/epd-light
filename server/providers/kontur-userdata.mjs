@@ -64,6 +64,28 @@ function partyReferenceXml(party, role, errors) {
   return `<OrganizationReference${attr('BoxId', boxId)}>${phone ? `<Phones>${tag('Phone', phone)}</Phones>` : ''}</OrganizationReference>`
 }
 
+function loadingDetailsState(input) {
+  const loading = input?.loadingDetails || {}
+  const partyTouched = [loading.matchingShipper, loading.employeeFullName, loading.employeePosition, loading.employeeResponsibilities, loading.partyInn]
+    .some((x) => String(x || '').trim())
+  const ownerTouched = [loading.ownerType, loading.ownerInn].some((x) => String(x || '').trim())
+  return { loading, partyTouched, ownerTouched }
+}
+
+function loadingDetailsXml(input) {
+  const { loading, partyTouched, ownerTouched } = loadingDetailsState(input)
+  let xml = ''
+  if (partyTouched) {
+    const employee = fio(loading.employeeFullName, 'Лицо погрузки', [])
+    const effectiveInn = String(loading.partyInn || '').trim() || (String(loading.matchingShipper) === '1' ? String(input.participants?.shipper?.inn || '').trim() : '')
+    xml += `<LoadingPartyDetails${attr('MatchingShipper', loading.matchingShipper)}><LoadingPartyEmployee${attr('Position', loading.employeePosition)}>${tag('JobResponsibilities', loading.employeeResponsibilities)}<Fio${attr('LastName', employee.lastName)}${attr('FirstName', employee.firstName)}${attr('MiddleName', employee.middleName)} /></LoadingPartyEmployee><RequisitesShipper${attr('Inn', effectiveInn)} /></LoadingPartyDetails>`
+  }
+  if (ownerTouched) {
+    xml += `<LoadingOwnerDetails${attr('Type', loading.ownerType)}><RequisitesShipper${attr('Inn', loading.ownerInn)} /></LoadingOwnerDetails>`
+  }
+  return xml
+}
+
 export function validateKonturT1Candidate(input) {
   const errors = []
   const warnings = []
@@ -111,13 +133,29 @@ export function validateKonturT1Candidate(input) {
   if (!positiveNumber(input.loadingFacts?.actualPlaces)) errors.push('Погрузка: фактическое число мест должно быть больше 0')
   if (!String(input.loadingFacts?.massDeterminationMethod || '').trim()) errors.push('Погрузка: не указан WeighingMethod')
 
+  const { loading, partyTouched, ownerTouched } = loadingDetailsState(input)
+  if (partyTouched) {
+    if (!['0', '1'].includes(String(loading.matchingShipper || '').trim())) errors.push('Лицо погрузки: MatchingShipper должен быть 0 или 1')
+    fio(loading.employeeFullName, 'Лицо погрузки', errors)
+    if (!String(loading.employeePosition || '').trim()) errors.push('Лицо погрузки: не указана должность сотрудника')
+    const effectiveInn = String(loading.partyInn || '').trim() || (String(loading.matchingShipper) === '1' ? String(input.participants?.shipper?.inn || '').trim() : '')
+    if (!/^\d{10}$|^\d{12}$/.test(effectiveInn)) errors.push('Лицо погрузки: нужен корректный ИНН')
+  } else {
+    warnings.push('LoadingPartyDetails не заполнен; обязательность блока нужно подтвердить актуальным UserDataXsd')
+  }
+  if (ownerTouched) {
+    if (!String(loading.ownerType || '').trim()) errors.push('Владелец места погрузки: не указан Type')
+    if (!/^\d{10}$|^\d{12}$/.test(String(loading.ownerInn || '').trim())) errors.push('Владелец места погрузки: нужен корректный ИНН')
+  } else {
+    warnings.push('LoadingOwnerDetails не заполнен; обязательность блока нужно подтвердить актуальным UserDataXsd')
+  }
+
   fio(input.signer?.fullName, 'Подписант', errors)
   if (!String(input.signer?.position || '').trim()) errors.push('Подписант: не указана должность')
   if (!String(input.shipperInstructions?.instructions || '').trim()) errors.push('Не заполнены указания грузоотправителя')
 
   warnings.push('UserDataXml preview не является результатом GenerateTitleXml и не подтверждает соответствие итоговой XSD ФНС')
   warnings.push('Время из datetime-local формируется без часового пояса с EnablingTimeZone=0; перед боевым подключением это нужно проверить на sandbox оператора')
-  warnings.push('Публичный пример T1 содержит LoadingPartyDetails и LoadingOwnerDetails; эти блоки пока намеренно не генерируются до фиксации их обязательности по актуальному UserDataXsd')
   warnings.push('ИП и иные типы участников заблокированы до проверки соответствующей ветки актуального UserDataXsd')
   return { ok: errors.length === 0, errors, warnings }
 }
@@ -144,8 +182,9 @@ export function buildKonturT1UserDataXml(input) {
   const cargoXml = input.cargo.map((item) => `<ItemDescription${attr('Name', item.name)}${attr('Condition', item.state)}${attr('PackageMethod', item.packagingMethod)}${attr('ContainerType', item.packagingCode)}${attr('CargoSpaceQuantity', positiveNumber(item.places))} IsForStateSystemRegistration="0"><Marks>${tag('Mark', item.marking)}</Marks><PlannedMass${attr('GrossWeight', positiveNumber(item.grossWeightKg))} /></ItemDescription>`).join('')
   const redirectPhone = String(input.shipperInstructions?.redirectionContact || '').trim()
   const vehicleModel = [input.vehicle?.brand, input.vehicle?.model].map((x) => String(x || '').trim()).filter(Boolean).join(' ')
+  const loadingExtraXml = loadingDetailsXml(input)
 
-  return `<?xml version="1.0" encoding="utf-8"?>\n<LogisticsWaybillConsignorTitle xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"${attr('Number', input.document.number)}${attr('Date', ruDate(input.document.date))}${attr('OrderNumber', input.document.orderNumber)}${attr('OrderDate', ruDate(input.document.orderDate))}>\n  <WaybillInfo>\n    <ShipperInfo IsFreightForwarder="0">\n      <Shipper>${partyReferenceXml(shipper, 'Грузоотправитель', [])}</Shipper>\n    </ShipperInfo>\n    <ConsigneeInfo>\n      <Consignee>${partyReferenceXml(consignee, 'Грузополучатель', [])}</Consignee>\n      <DeliveryAddres><AddressLogisticsWaybill>${russianAddressXml(input.route.unloadingRussianAddress)}</AddressLogisticsWaybill></DeliveryAddres>\n    </ConsigneeInfo>\n    <CargoInfo><ItemDescriptions>${cargoXml}</ItemDescriptions></CargoInfo>\n    <ConsignorDirectives${attr('TransportationDirectives', input.shipperInstructions.instructions)}>${redirectPhone ? `<ReaddressDetails AccountableSide="Consignor"><Phones>${tag('Phone', redirectPhone)}</Phones></ReaddressDetails>` : ''}</ConsignorDirectives>\n    <Carrier>${partyReferenceXml(carrier, 'Перевозчик', [])}</Carrier>\n    <Drivers><DriverInfo${attr('LastName', driver.lastName)}${attr('FirstName', driver.firstName)}${attr('MiddleName', driver.middleName)}${attr('LicenseNumber', input.driver.licenseNumber || input.driver.licenseLegacy)}${attr('LicenseSeries', input.driver.licenseSeries)}${attr('LicenseDate', ruDate(input.driver.licenseIssueDate))}><Phones>${tag('Phone', input.driver.phone)}</Phones></DriverInfo></Drivers>\n    <VehicleInfo><Vehicle${attr('Number', input.vehicle.registrationNumber)}${attr('Ownership', input.vehicle.ownershipType)}${attr('Type', input.vehicle.type)}${attr('Model', vehicleModel)}${attr('MaxWeight', input.vehicle.loadCapacity)}${attr('Capacity', input.vehicle.volumeCapacity)} /></VehicleInfo>\n    <LoadingInfo${attr('StatedArrivalDateTime', statedArrival)} StatedArrivalDateTimeEnablingTimeZone="0"${attr('ActualArrivalDateTime', actualArrival)} ActualArrivalDateTimeEnablingTimeZone="0"${attr('ActualDepartureDateTime', actualDeparture)} ActualDepartureDateTimeEnablingTimeZone="0"${attr('GrossWeight', grossWeight)}${attr('WeighingMethod', input.loadingFacts.massDeterminationMethod)}${attr('NumberOfPlaces', places)}>\n      <ActualLoadingAddress><AddressLogisticsWaybill>${russianAddressXml(input.route.loadingRussianAddress)}</AddressLogisticsWaybill></ActualLoadingAddress>\n    </LoadingInfo>\n  </WaybillInfo>\n  <Signer SignerType="1"><SignerDetails${attr('Position', input.signer.position)}${attr('LastName', signer.lastName)}${attr('FirstName', signer.firstName)}${attr('MiddleName', signer.middleName)} /></Signer>\n</LogisticsWaybillConsignorTitle>`
+  return `<?xml version="1.0" encoding="utf-8"?>\n<LogisticsWaybillConsignorTitle xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"${attr('Number', input.document.number)}${attr('Date', ruDate(input.document.date))}${attr('OrderNumber', input.document.orderNumber)}${attr('OrderDate', ruDate(input.document.orderDate))}>\n  <WaybillInfo>\n    <ShipperInfo IsFreightForwarder="0">\n      <Shipper>${partyReferenceXml(shipper, 'Грузоотправитель', [])}</Shipper>\n    </ShipperInfo>\n    <ConsigneeInfo>\n      <Consignee>${partyReferenceXml(consignee, 'Грузополучатель', [])}</Consignee>\n      <DeliveryAddres><AddressLogisticsWaybill>${russianAddressXml(input.route.unloadingRussianAddress)}</AddressLogisticsWaybill></DeliveryAddres>\n    </ConsigneeInfo>\n    <CargoInfo><ItemDescriptions>${cargoXml}</ItemDescriptions></CargoInfo>\n    <ConsignorDirectives${attr('TransportationDirectives', input.shipperInstructions.instructions)}>${redirectPhone ? `<ReaddressDetails AccountableSide="Consignor"><Phones>${tag('Phone', redirectPhone)}</Phones></ReaddressDetails>` : ''}</ConsignorDirectives>\n    <Carrier>${partyReferenceXml(carrier, 'Перевозчик', [])}</Carrier>\n    <Drivers><DriverInfo${attr('LastName', driver.lastName)}${attr('FirstName', driver.firstName)}${attr('MiddleName', driver.middleName)}${attr('LicenseNumber', input.driver.licenseNumber || input.driver.licenseLegacy)}${attr('LicenseSeries', input.driver.licenseSeries)}${attr('LicenseDate', ruDate(input.driver.licenseIssueDate))}><Phones>${tag('Phone', input.driver.phone)}</Phones></DriverInfo></Drivers>\n    <VehicleInfo><Vehicle${attr('Number', input.vehicle.registrationNumber)}${attr('Ownership', input.vehicle.ownershipType)}${attr('Type', input.vehicle.type)}${attr('Model', vehicleModel)}${attr('MaxWeight', input.vehicle.loadCapacity)}${attr('Capacity', input.vehicle.volumeCapacity)} /></VehicleInfo>\n    <LoadingInfo${attr('StatedArrivalDateTime', statedArrival)} StatedArrivalDateTimeEnablingTimeZone="0"${attr('ActualArrivalDateTime', actualArrival)} ActualArrivalDateTimeEnablingTimeZone="0"${attr('ActualDepartureDateTime', actualDeparture)} ActualDepartureDateTimeEnablingTimeZone="0"${attr('GrossWeight', grossWeight)}${attr('WeighingMethod', input.loadingFacts.massDeterminationMethod)}${attr('NumberOfPlaces', places)}>\n      <ActualLoadingAddress><AddressLogisticsWaybill>${russianAddressXml(input.route.loadingRussianAddress)}</AddressLogisticsWaybill></ActualLoadingAddress>${loadingExtraXml ? `\n      ${loadingExtraXml}` : ''}\n    </LoadingInfo>\n  </WaybillInfo>\n  <Signer SignerType="1"><SignerDetails${attr('Position', input.signer.position)}${attr('LastName', signer.lastName)}${attr('FirstName', signer.firstName)}${attr('MiddleName', signer.middleName)} /></Signer>\n</LogisticsWaybillConsignorTitle>`
 }
 
 export const KONTUR_USERDATA_PREVIEW_CONTRACT = Object.freeze({
