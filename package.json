@@ -8,6 +8,7 @@
     "deploy:check": "node scripts/check-deployment-env.mjs",
     "deploy:env:test": "node scripts/test-deployment-env.mjs",
     "deploy:server-day": "sh deploy/server-day.sh",
+    "db:migrate": "sh deploy/apply-migrations.sh",
     "backup:create": "sh deploy/backup-postgres.sh",
     "backup:verify": "sh deploy/verify-postgres-backup.sh",
     "backup:restore:test": "sh deploy/test-restore-postgres.sh",
