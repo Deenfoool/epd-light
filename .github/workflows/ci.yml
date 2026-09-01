@@ -20,12 +20,20 @@ jobs:
       - name: Gateway and script syntax
         run: |
           node --check server/index.mjs
+          node --check server/providers/kontur.mjs
+          node --check server/providers/kontur-userdata.mjs
           node --check scripts/preflight.mjs
           node --check scripts/check-fns-schema.mjs
           node --check scripts/test-gateway.mjs
+          node --check scripts/test-kontur-provider.mjs
+          node --check scripts/test-kontur-userdata.mjs
       - name: Offline invariants
         run: npm run preflight
       - name: Gateway smoke test
         run: npm run gateway:test
+      - name: Kontur provider contract
+        run: npm run kontur:provider:test
+      - name: Kontur UserDataXml preview mapping
+        run: npm run kontur:userdata:test
       - run: npm install
       - run: npm run build
