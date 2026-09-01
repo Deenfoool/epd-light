@@ -1,0 +1,28 @@
+[Unit]
+Description=EPD Light encrypted PostgreSQL backup
+Documentation=file:/opt/epd-light/docs/BACKUP-RECOVERY.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=epdlight
+Group=epdlight
+SupplementaryGroups=docker
+WorkingDirectory=/opt/epd-light
+EnvironmentFile=/opt/epd-light/.env.production
+ExecStart=/bin/sh /opt/epd-light/deploy/backup-postgres.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/epd-light/.backups
+
+# This is a template only. Before enabling it, confirm:
+# - project path and Linux user;
+# - Docker group access;
+# - backup directory;
+# - EPD_DATABASE_URL reachability from the pg client container;
+# - offsite copy is configured separately.
