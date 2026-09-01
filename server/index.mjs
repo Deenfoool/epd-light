@@ -1,6 +1,8 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { auditErrorCode, writeGatewayAudit } from './audit.mjs'
+import { GATEWAY_AUTH_POLICY, assertGatewayAuthConfig, authenticateGatewayRequest, gatewayAuthConfigFromEnv } from './auth.mjs'
+import { authenticatedRateKey, consumeRateLimit, rateLimitConfigFromEnv, rateLimitHeaders, requestNetworkKey } from './rate-limit.mjs'
 import { konturPublicCapabilities } from './providers/kontur.mjs'
 import { KONTUR_USERDATA_PREVIEW_CONTRACT, buildKonturT1UserDataXml, validateKonturT1Candidate } from './providers/kontur-userdata.mjs'
 
@@ -8,6 +10,8 @@ const port = Number(process.env.PORT || 8787)
 const provider = process.env.EPD_OPERATOR_PROVIDER || 'none'
 const operatorMode = process.env.EPD_OPERATOR_MODE || 'disabled'
 const maxBodyBytes = Number(process.env.EPD_MAX_BODY_BYTES || 512 * 1024)
+const authConfig = assertGatewayAuthConfig(gatewayAuthConfigFromEnv(), operatorMode)
+const rateConfig = rateLimitConfigFromEnv()
 const allowedOrigins = new Set(
   String(process.env.EPD_ALLOWED_ORIGINS || '')
     .split(',')
@@ -15,7 +19,7 @@ const allowedOrigins = new Set(
     .filter(Boolean),
 )
 
-function responseHeaders(requestId, origin) {
+function responseHeaders(requestId, origin, extra = {}) {
   const headers = {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
@@ -23,16 +27,18 @@ function responseHeaders(requestId, origin) {
     'x-frame-options': 'DENY',
     'referrer-policy': 'no-referrer',
     'x-request-id': requestId,
+    ...extra,
   }
   if (origin && allowedOrigins.has(origin)) {
     headers['access-control-allow-origin'] = origin
+    headers['access-control-expose-headers'] = 'x-request-id,ratelimit-limit,ratelimit-remaining,ratelimit-reset,retry-after'
     headers['vary'] = 'Origin'
   }
   return headers
 }
 
-function sendJson(res, status, payload, requestId, origin) {
-  res.writeHead(status, responseHeaders(requestId, origin))
+function sendJson(res, status, payload, requestId, origin, extraHeaders = {}) {
+  res.writeHead(status, responseHeaders(requestId, origin, extraHeaders))
   res.end(JSON.stringify(payload))
 }
 
@@ -108,8 +114,8 @@ const server = createServer(async (req, res) => {
     durationMs: Date.now() - startedAt,
     errorCode,
   })
-  const respond = (status, payload, errorCode) => {
-    sendJson(res, status, payload, requestId, origin)
+  const respond = (status, payload, errorCode, extraHeaders = {}) => {
+    sendJson(res, status, payload, requestId, origin, extraHeaders)
     audit(status, errorCode ?? auditErrorCode(payload, status))
   }
 
@@ -141,24 +147,68 @@ const server = createServer(async (req, res) => {
       mode: operatorMode,
       externalSendEnabled: false,
       xsdValidationEnabled: false,
-      authRequiredForFutureSend: true,
+      auth: {
+        mode: authConfig.mode,
+        requiredForOperatorApi: authConfig.mode === 'supabase',
+        policy: GATEWAY_AUTH_POLICY,
+      },
+      rateLimit: {
+        windowMs: rateConfig.windowMs,
+        maxPerAuthenticatedSubject: rateConfig.max,
+        preAuthMaxPerNetwork: rateConfig.authMax,
+      },
       supportedCandidate: 'epd-light/operator-candidate-v1',
       localKonturUserDataPreview: KONTUR_USERDATA_PREVIEW_CONTRACT,
       providerAdapter: providerCapabilities(),
-      message: 'Gateway умеет локально собирать preview UserDataXml, но GenerateTitleXml, подписание и отправка наружу намеренно отключены.',
+      message: 'Gateway умеет локально собирать preview UserDataXml. Operator API защищён auth/rate-limit middleware; GenerateTitleXml, подписание и отправка наружу намеренно отключены.',
       requestId,
     })
     return
+  }
+
+  const operatorApiRequest = url.pathname.startsWith('/api/operator/')
+  const publicOperatorRequest = req.method === 'GET' && url.pathname === '/api/operator/capabilities'
+  let operatorRateHeaders = {}
+
+  if (operatorApiRequest && !publicOperatorRequest) {
+    const preAuthLimit = consumeRateLimit({
+      key: requestNetworkKey(req),
+      scope: 'operator-preauth',
+      max: rateConfig.authMax,
+      windowMs: rateConfig.windowMs,
+    })
+    if (!preAuthLimit.allowed) {
+      respond(429, { error: 'rate_limited', message: 'Too many operator API requests', requestId }, 'rate_limited', rateLimitHeaders(preAuthLimit))
+      return
+    }
+
+    const auth = await authenticateGatewayRequest(req, authConfig)
+    if (!auth.ok) {
+      respond(auth.status, { error: auth.error, message: auth.message, requestId }, auth.error, rateLimitHeaders(preAuthLimit))
+      return
+    }
+
+    const actionLimit = consumeRateLimit({
+      key: authenticatedRateKey(auth, req),
+      scope: 'operator-api',
+      max: rateConfig.max,
+      windowMs: rateConfig.windowMs,
+    })
+    operatorRateHeaders = rateLimitHeaders(actionLimit)
+    if (!actionLimit.allowed) {
+      respond(429, { error: 'rate_limited', message: 'Operator API rate limit exceeded', requestId }, 'rate_limited', operatorRateHeaders)
+      return
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/operator/preflight') {
     try {
       const body = await readJson(req)
       const result = preflightCandidate(body)
-      respond(result.ok ? 200 : 422, { ...result, requestId }, result.ok ? null : 'candidate_invalid')
+      respond(result.ok ? 200 : 422, { ...result, requestId }, result.ok ? null : 'candidate_invalid', operatorRateHeaders)
     } catch (error) {
       const status = Number(error?.statusCode || 500)
-      respond(status, { error: error instanceof Error ? error.message : 'request failed', requestId }, status === 400 ? 'invalid_json' : status === 413 ? 'body_too_large' : 'request_failed')
+      respond(status, { error: error instanceof Error ? error.message : 'request failed', requestId }, status === 400 ? 'invalid_json' : status === 413 ? 'body_too_large' : 'request_failed', operatorRateHeaders)
     }
     return
   }
@@ -168,7 +218,7 @@ const server = createServer(async (req, res) => {
       const body = await readJson(req)
       const validation = validateKonturT1Candidate(body)
       if (!validation.ok) {
-        respond(422, { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId }, 'kontur_candidate_invalid')
+        respond(422, { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId }, 'kontur_candidate_invalid', operatorRateHeaders)
         return
       }
       const xml = buildKonturT1UserDataXml(body)
@@ -180,11 +230,11 @@ const server = createServer(async (req, res) => {
         contract: KONTUR_USERDATA_PREVIEW_CONTRACT,
         externalCallMade: false,
         requestId,
-      })
+      }, null, operatorRateHeaders)
     } catch (error) {
       const status = Number(error?.statusCode || 500)
       const validation = error?.validation
-      respond(validation ? 422 : status, validation ? { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId } : { error: error instanceof Error ? error.message : 'request failed', requestId }, validation ? 'kontur_candidate_invalid' : status === 400 ? 'invalid_json' : status === 413 ? 'body_too_large' : 'request_failed')
+      respond(validation ? 422 : status, validation ? { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId } : { error: error instanceof Error ? error.message : 'request failed', requestId }, validation ? 'kontur_candidate_invalid' : status === 400 ? 'invalid_json' : status === 413 ? 'body_too_large' : 'request_failed', operatorRateHeaders)
     }
     return
   }
@@ -196,11 +246,11 @@ const server = createServer(async (req, res) => {
       mode: operatorMode,
       message: 'Юридически значимая отправка заблокирована: GenerateTitleXml/PostMessage не подключены к gateway, а подписание и операторский тестовый контур не настроены.',
       requestId,
-    })
+    }, null, operatorRateHeaders)
     return
   }
 
-  respond(404, { error: 'not_found', requestId })
+  respond(404, { error: 'not_found', requestId }, null, operatorRateHeaders)
 })
 
 server.requestTimeout = 15_000
@@ -208,5 +258,5 @@ server.headersTimeout = 10_000
 server.keepAliveTimeout = 5_000
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`EPD Light operator gateway listening on :${port}; provider=${provider}; mode=${operatorMode}; externalSendEnabled=false`)
+  console.log(`EPD Light operator gateway listening on :${port}; provider=${provider}; mode=${operatorMode}; auth=${authConfig.mode}; externalSendEnabled=false`)
 })
