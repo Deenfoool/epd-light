@@ -8,6 +8,7 @@ import {
 import type { Company, DocumentRow, Driver, EtrnData, Party, Profile, RussianAddressDraft, Vehicle } from './types'
 import { cargoTotals, emptyCargo, emptyRussianAddress, exportJson, isReady, newDoc, normalizeEtrn, operatorReadiness, statusLabel, validateEtrn, validGuid, validInn } from './etrn'
 import { buildOperatorDraft } from './operator-draft'
+import { gatewayFetch } from './gateway'
 import {
   cloudEnabled, deleteCompany, deleteDocument, deleteDriver, deleteVehicle, getProfile, getSessionEmail,
   listCompanies, listDocuments, listDrivers, listVehicles, saveCompany, saveDocument, saveDriver,
