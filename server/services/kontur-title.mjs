@@ -1,13 +1,13 @@
+import { authorizeExternalOperatorDocument } from '../authorization.mjs'
 import { buildKonturT1UserDataXml, validateKonturT1Candidate } from '../providers/kontur-userdata.mjs'
 import { KONTUR_T1_CONTRACT, generateKonturT1Xml, konturConfigFromEnv, konturConfigStatus } from '../providers/kontur.mjs'
 
 /**
- * Server-only boundary for the future sandbox integration.
- * It validates an EPD Light operator candidate, builds Diadoc UserDataXml and
+ * Low-level server-only boundary for controlled utilities/tests.
+ * It validates an already canonical candidate, builds Diadoc UserDataXml and
  * calls GenerateTitleXml. It NEVER signs or sends the generated title.
  *
- * IMPORTANT: this function is intentionally not exposed by server/index.mjs.
- * The public gateway has no authenticated external-call route yet.
+ * IMPORTANT: do not expose this function directly from a gateway route.
  */
 export async function generateKonturT1FromCandidate({
   candidate,
@@ -53,9 +53,39 @@ export async function generateKonturT1FromCandidate({
   }
 }
 
+/**
+ * Future gateway-facing boundary. It refuses client-supplied candidate data and
+ * requires a backend repository to load the canonical candidate owned by JWT sub.
+ */
+export async function generateAuthorizedKonturT1({
+  auth,
+  documentId,
+  loadOwnedCandidate,
+  config,
+  fetchImpl = fetch,
+  baseUrl,
+}) {
+  const authorization = await authorizeExternalOperatorDocument({ auth, documentId, loadOwnedCandidate })
+  if (!authorization.ok) {
+    const error = new Error(`Kontur external authorization failed: ${authorization.error}`)
+    error.code = authorization.error
+    error.statusCode = authorization.status
+    throw error
+  }
+  return generateKonturT1FromCandidate({
+    candidate: authorization.candidate,
+    config,
+    fetchImpl,
+    baseUrl,
+  })
+}
+
 export const KONTUR_GENERATION_BOUNDARY = Object.freeze({
   serverOnly: true,
   gatewayRouteExposed: false,
+  verifiedJwtSubjectRequiredForGateway: true,
+  serverLoadedDocumentRequiredForGateway: true,
+  clientPayloadAuthoritative: false,
   callsGenerateTitleXml: true,
   callsPostMessage: false,
   signsDocument: false,
