@@ -22,7 +22,9 @@ requireSnippets('app', app, [
   'Структурированный адрес погрузки', 'Лицо и владелец места погрузки', 'MatchingShipper',
   'Код тары / ContainerType', 'Код Ownership (оператор)', 'companies-example-t1.csv',
   '/api/operator/capabilities', '/api/operator/kontur/userdata-preview', 'Kontur XML preview',
-  'Supabase access token', 'RLS repository adapter', 'service_role для этого пути не нужен',
+  '/api/operator/kontur/generate-title-sandbox', 'Kontur sandbox', 'documentId:doc.id',
+  'реальный sandbox-запрос GenerateTitleXml', 'Supabase access token', 'RLS repository adapter',
+  'service_role для этого пути не нужен',
 ])
 
 const gatewayClient = await read('src', 'gateway.ts')
@@ -159,6 +161,18 @@ requireSnippets('gateway Docker image', serverDockerfile, ['COPY package.json', 
 const serverPkg = JSON.parse(await read('server', 'package.json'))
 if (serverPkg.dependencies?.jose !== '6.2.10') fail('gateway Docker runtime must pin jose 6.2.10')
 
+const deployCheck = await read('scripts', 'check-deployment-env.mjs')
+requireSnippets('deployment env checker', deployCheck, [
+  'Production EPD_GATEWAY_AUTH_MODE must be supabase', 'EPD_DATA_SUPABASE_PUBLIC_KEY',
+  'Wildcard CORS origin is forbidden', 'Potential server secret exposed through VITE_*',
+  'EPD_EXTERNAL_RATE_LIMIT_MAX must not exceed EPD_RATE_LIMIT_MAX', 'EPD_KONTUR_BOX_ID',
+])
+const deployTest = await read('scripts', 'test-deployment-env.mjs')
+requireSnippets('deployment env test', deployTest, [
+  'safe production env must pass', 'wildcard CORS must fail', 'VITE secret exposure must fail',
+  'sandbox without Kontur credentials must fail', 'complete sandbox env must pass',
+])
+
 const schemaCheck = await read('scripts', 'check-fns-schema.mjs')
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 const konturSchemaCheck = await read('scripts', 'check-kontur-schemas.mjs')
@@ -171,10 +185,10 @@ requireSnippets('Kontur sandbox test', sandboxTest, [
 
 const pkg = JSON.parse(await read('package.json'))
 for (const script of [
-  'build','prebuild','preflight','audit:test','auth:test','authorization:test','repository:test','rate-limit:test',
+  'build','prebuild','preflight','deploy:check','deploy:env:test','audit:test','auth:test','authorization:test','repository:test','rate-limit:test',
   'gateway:test','gateway:auth:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:sandbox:test',
   'kontur:schema:check','kontur:schema:save','fns:schema:check',
 ]) if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
 if (pkg.dependencies?.jose !== '6.2.10') fail('root jose dependency must stay pinned to tested version 6.2.10')
 
-console.log(`Preflight OK: ${parts.length} source parts, JWT/JWKS auth, RLS ownership repository, canonical mapping, sandbox GenerateTitle boundary, rate limits, privacy audit, Docker gateway and fail-closed PostMessage/send verified`)
+console.log(`Preflight OK: ${parts.length} source parts, deployment env policy, JWT/JWKS auth, RLS ownership repository, canonical mapping, sandbox GenerateTitle boundary, rate limits, privacy audit, Docker gateway and fail-closed PostMessage/send verified`)
