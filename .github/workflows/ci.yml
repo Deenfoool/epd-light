@@ -24,6 +24,7 @@ jobs:
           node --check server/audit.mjs
           node --check server/auth.mjs
           node --check server/authorization.mjs
+          node --check server/idempotency.mjs
           node --check server/rate-limit.mjs
           node --check server/mappers/operator-candidate.mjs
           node --check server/repositories/supabase-documents.mjs
@@ -41,6 +42,7 @@ jobs:
           node --check scripts/test-auth.mjs
           node --check scripts/test-authorization.mjs
           node --check scripts/test-supabase-repository.mjs
+          node --check scripts/test-idempotency.mjs
           node --check scripts/test-rate-limit.mjs
           node --check scripts/test-gateway.mjs
           node --check scripts/test-gateway-auth.mjs
@@ -62,6 +64,8 @@ jobs:
         run: npm run authorization:test
       - name: Canonical Supabase RLS repository
         run: npm run repository:test
+      - name: Operator idempotency
+        run: npm run idempotency:test
       - name: Rate limiter unit test
         run: npm run rate-limit:test
       - name: Gateway smoke test (local auth disabled)
