@@ -40,8 +40,9 @@ for (const table of ['profiles','companies','vehicles','drivers','documents','in
 if (!migration.includes('grant select, insert, update, delete on public.documents to authenticated')) fail('authenticated document grants missing')
 
 const operator = await readFile(path.join(root, 'src', 'operator.ts'), 'utf8')
-if (!operator.includes('sendToOperatorDisabled')) fail('operator send guard missing')
-if (!operator.includes('server') && !operator.includes('browser')) fail('operator security boundary documentation missing')
+for (const snippet of ['interface OperatorAdapter', 'assertOperatorConfigured', 'sendToOperatorDisabled', 'Отправка оператору ИС ЭПД не настроена в MVP']) {
+  if (!operator.includes(snippet)) fail(`operator safety invariant missing: ${snippet}`)
+}
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 if (!pkg.scripts?.build || !pkg.scripts?.prebuild || !pkg.scripts?.preflight) fail('build/prebuild/preflight scripts missing')
