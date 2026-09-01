@@ -79,8 +79,7 @@ export async function getKonturDocumentTypes({ boxId, accessToken, fetchImpl = f
 /**
  * Generates T1 XML from operator-specific UserDataXml through Diadoc GenerateTitleXml.
  * IMPORTANT: generated XML is still not signed and this function does not send it.
- * The gateway does not expose this function until provider credentials and the
- * UserData mapping are validated in a controlled integration environment.
+ * The gateway intentionally does not expose this external call yet.
  */
 export async function generateKonturT1Xml({ boxId, accessToken, userDataXml, fetchImpl = fetch, baseUrl = API_BASE }) {
   const xml = requireValue(userDataXml, 'userDataXml')
@@ -107,8 +106,10 @@ export function konturPublicCapabilities(config = konturConfigFromEnv()) {
     boxIdConfigured: status.boxIdConfigured,
     accessTokenConfigured: status.accessTokenConfigured,
     contract: KONTUR_T1_CONTRACT,
+    userDataPreviewWiredToGateway: true,
+    userDataPreviewExternalCall: false,
     generateTitleWiredToGateway: false,
     sendWiredToGateway: false,
-    note: 'Adapter реализует discovery и GenerateTitleXml как серверные функции, но gateway не открывает их наружу до завершения mapping/auth тестов.',
+    note: 'Gateway локально формирует preview UserDataXml. GetDocumentTypes/GenerateTitleXml существуют как серверные функции, но внешние вызовы и отправка не открыты до sandbox-проверки.',
   }
 }
