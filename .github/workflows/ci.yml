@@ -32,6 +32,7 @@ jobs:
           node --check server/services/kontur-title.mjs
           node --check server/services/kontur-sandbox.mjs
           node --check scripts/preflight.mjs
+          node --check scripts/preflight-deploy.mjs
           node --check scripts/check-deployment-env.mjs
           node --check scripts/test-deployment-env.mjs
           node --check scripts/check-fns-schema.mjs
@@ -47,6 +48,7 @@ jobs:
           node --check scripts/test-kontur-userdata.mjs
           node --check scripts/test-kontur-generation.mjs
           node --check scripts/test-kontur-sandbox.mjs
+          sh -n deploy/server-day.sh
       - name: Offline invariants
         run: npm run preflight
       - name: Deployment env policy
