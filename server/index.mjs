@@ -4,22 +4,43 @@ import { auditErrorCode, writeGatewayAudit } from './audit.mjs'
 import { GATEWAY_AUTH_POLICY, assertGatewayAuthConfig, authenticateGatewayRequest, gatewayAuthConfigFromEnv } from './auth.mjs'
 import { EXTERNAL_OPERATOR_AUTHORIZATION_POLICY } from './authorization.mjs'
 import { authenticatedRateKey, consumeRateLimit, rateLimitConfigFromEnv, rateLimitHeaders, requestNetworkKey } from './rate-limit.mjs'
-import { konturPublicCapabilities } from './providers/kontur.mjs'
+import { konturConfigFromEnv, konturConfigStatus, konturPublicCapabilities } from './providers/kontur.mjs'
 import { KONTUR_USERDATA_PREVIEW_CONTRACT, buildKonturT1UserDataXml, validateKonturT1Candidate } from './providers/kontur-userdata.mjs'
-import { supabaseDocumentRepositoryPublicCapabilities } from './repositories/supabase-documents.mjs'
+import {
+  supabaseDocumentRepositoryConfigFromEnv,
+  supabaseDocumentRepositoryPublicCapabilities,
+  supabaseDocumentRepositoryStatus,
+} from './repositories/supabase-documents.mjs'
+import {
+  KONTUR_SANDBOX_GENERATION_POLICY,
+  generateKonturSandboxTitleForDocument,
+  validateSandboxGenerateRequest,
+} from './services/kontur-sandbox.mjs'
 
 const port = Number(process.env.PORT || 8787)
 const provider = process.env.EPD_OPERATOR_PROVIDER || 'none'
 const operatorMode = process.env.EPD_OPERATOR_MODE || 'disabled'
 const maxBodyBytes = Number(process.env.EPD_MAX_BODY_BYTES || 512 * 1024)
+if (!['disabled', 'sandbox'].includes(operatorMode)) throw new Error(`Unsupported EPD_OPERATOR_MODE: ${operatorMode}`)
+if (operatorMode === 'sandbox' && provider !== 'kontur') throw new Error('Sandbox operator mode currently requires EPD_OPERATOR_PROVIDER=kontur')
 const authConfig = assertGatewayAuthConfig(gatewayAuthConfigFromEnv(), operatorMode)
 const rateConfig = rateLimitConfigFromEnv()
+const repositoryConfig = supabaseDocumentRepositoryConfigFromEnv()
+const repositoryStatus = supabaseDocumentRepositoryStatus(repositoryConfig)
+const konturConfig = konturConfigFromEnv()
+const konturStatus = konturConfigStatus(konturConfig)
 const allowedOrigins = new Set(
   String(process.env.EPD_ALLOWED_ORIGINS || '')
     .split(',')
     .map((x) => x.trim())
     .filter(Boolean),
 )
+
+const sandboxGenerateReady = () => operatorMode === 'sandbox'
+  && provider === 'kontur'
+  && authConfig.mode === 'supabase'
+  && repositoryStatus.configured
+  && konturStatus.configured
 
 function responseHeaders(requestId, origin, extra = {}) {
   const headers = {
@@ -101,6 +122,24 @@ function providerCapabilities() {
   }
 }
 
+function sandboxError(error) {
+  const code = String(error?.code || '')
+  const known = new Map([
+    ['document_id_required', 400],
+    ['document_not_available', 404],
+    ['document_identity_mismatch', 409],
+    ['kontur_candidate_invalid', 422],
+    ['document_repository_unconfigured', 503],
+    ['document_repository_token_required', 503],
+    ['kontur_config_incomplete', 503],
+    ['sandbox_auth_required', 403],
+  ])
+  return {
+    status: known.get(code) || 502,
+    code: known.has(code) ? code : 'sandbox_generation_failed',
+  }
+}
+
 const server = createServer(async (req, res) => {
   const requestId = randomUUID()
   const startedAt = Date.now()
@@ -156,17 +195,25 @@ const server = createServer(async (req, res) => {
       },
       authorization: {
         ...EXTERNAL_OPERATOR_AUTHORIZATION_POLICY,
-        repository: supabaseDocumentRepositoryPublicCapabilities(),
+        repository: supabaseDocumentRepositoryPublicCapabilities(repositoryConfig),
       },
       rateLimit: {
         windowMs: rateConfig.windowMs,
         maxPerAuthenticatedSubject: rateConfig.max,
         preAuthMaxPerNetwork: rateConfig.authMax,
+        maxExternalCallsPerAuthenticatedSubject: rateConfig.externalMax,
+      },
+      sandboxGenerateTitle: {
+        ...KONTUR_SANDBOX_GENERATION_POLICY,
+        enabled: operatorMode === 'sandbox' && provider === 'kontur',
+        ready: sandboxGenerateReady(),
+        repositoryConfigured: repositoryStatus.configured,
+        operatorCredentialsConfigured: konturStatus.configured,
       },
       supportedCandidate: 'epd-light/operator-candidate-v1',
       localKonturUserDataPreview: KONTUR_USERDATA_PREVIEW_CONTRACT,
       providerAdapter: providerCapabilities(),
-      message: 'Gateway умеет локально собирать preview UserDataXml. Operator API защищён auth/rate-limit middleware; внешний GenerateTitle требует перечитать принадлежащий пользователю документ через RLS repository и пока не опубликован.',
+      message: 'Gateway умеет локально собирать preview UserDataXml. Sandbox GenerateTitleXml принимает только documentId, перечитывает документ через RLS и не выполняет подписание/PostMessage.',
       requestId,
     })
     return
@@ -175,6 +222,7 @@ const server = createServer(async (req, res) => {
   const operatorApiRequest = url.pathname.startsWith('/api/operator/')
   const publicOperatorRequest = req.method === 'GET' && url.pathname === '/api/operator/capabilities'
   let operatorRateHeaders = {}
+  let operatorAuth = null
 
   if (operatorApiRequest && !publicOperatorRequest) {
     const preAuthLimit = consumeRateLimit({
@@ -193,6 +241,7 @@ const server = createServer(async (req, res) => {
       respond(auth.status, { error: auth.error, message: auth.message, requestId }, auth.error, rateLimitHeaders(preAuthLimit))
       return
     }
+    operatorAuth = auth
 
     const actionLimit = consumeRateLimit({
       key: authenticatedRateKey(auth, req),
@@ -245,12 +294,79 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && url.pathname === KONTUR_SANDBOX_GENERATION_POLICY.gatewayRoute) {
+    if (operatorMode !== 'sandbox' || provider !== 'kontur') {
+      respond(404, { error: 'not_found', requestId }, 'not_found', operatorRateHeaders)
+      return
+    }
+    if (!sandboxGenerateReady()) {
+      respond(503, {
+        error: 'sandbox_not_ready',
+        message: 'Sandbox GenerateTitleXml requires Supabase auth/RLS repository and Kontur sandbox credentials',
+        requestId,
+      }, 'sandbox_not_ready', operatorRateHeaders)
+      return
+    }
+
+    const externalLimit = consumeRateLimit({
+      key: authenticatedRateKey(operatorAuth, req),
+      scope: 'operator-external',
+      max: rateConfig.externalMax,
+      windowMs: rateConfig.windowMs,
+    })
+    const externalHeaders = rateLimitHeaders(externalLimit)
+    if (!externalLimit.allowed) {
+      respond(429, { error: 'rate_limited', message: 'External operator call rate limit exceeded', requestId }, 'rate_limited', externalHeaders)
+      return
+    }
+
+    try {
+      const body = await readJson(req)
+      const requestValidation = validateSandboxGenerateRequest(body)
+      if (!requestValidation.ok) {
+        respond(requestValidation.status, {
+          error: requestValidation.error,
+          message: requestValidation.message,
+          requestId,
+        }, requestValidation.error, externalHeaders)
+        return
+      }
+
+      const result = await generateKonturSandboxTitleForDocument({
+        auth: operatorAuth,
+        documentId: requestValidation.documentId,
+        repositoryConfig,
+        konturConfig,
+      })
+      respond(200, {
+        ok: true,
+        documentId: requestValidation.documentId,
+        provider: result.provider,
+        contract: result.contract,
+        generatedXml: result.generatedXml,
+        externalCallMade: true,
+        signed: false,
+        sent: false,
+        message: 'Sandbox GenerateTitleXml выполнен. XML не подписан и не отправлен через PostMessage.',
+        requestId,
+      }, null, externalHeaders)
+    } catch (error) {
+      const mapped = sandboxError(error)
+      respond(mapped.status, {
+        error: mapped.code,
+        message: 'Sandbox GenerateTitleXml failed before any signing or PostMessage step',
+        requestId,
+      }, mapped.code, externalHeaders)
+    }
+    return
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/operator/send') {
     respond(503, {
       error: 'operator_send_disabled',
       provider,
       mode: operatorMode,
-      message: 'Юридически значимая отправка заблокирована: GenerateTitleXml/PostMessage не подключены к gateway, а подписание и операторский тестовый контур не настроены.',
+      message: 'Юридически значимая отправка заблокирована: PostMessage не подключён к gateway, а подписание и production operator flow не настроены.',
       requestId,
     }, null, operatorRateHeaders)
     return
