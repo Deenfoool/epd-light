@@ -22,6 +22,7 @@ jobs:
           node --check server/index.mjs
           node --check server/audit.mjs
           node --check server/auth.mjs
+          node --check server/authorization.mjs
           node --check server/rate-limit.mjs
           node --check server/providers/kontur.mjs
           node --check server/providers/kontur-userdata.mjs
@@ -31,6 +32,7 @@ jobs:
           node --check scripts/check-kontur-schemas.mjs
           node --check scripts/test-audit.mjs
           node --check scripts/test-auth.mjs
+          node --check scripts/test-authorization.mjs
           node --check scripts/test-rate-limit.mjs
           node --check scripts/test-gateway.mjs
           node --check scripts/test-gateway-auth.mjs
@@ -41,6 +43,8 @@ jobs:
         run: npm run preflight
       - name: Privacy-safe audit
         run: npm run audit:test
+      - name: External document authorization policy
+        run: npm run authorization:test
       - name: Rate limiter unit test
         run: npm run rate-limit:test
       - name: Gateway smoke test (local auth disabled)
