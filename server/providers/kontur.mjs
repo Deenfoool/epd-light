@@ -108,8 +108,10 @@ export function konturPublicCapabilities(config = konturConfigFromEnv()) {
     contract: KONTUR_T1_CONTRACT,
     userDataPreviewWiredToGateway: true,
     userDataPreviewExternalCall: false,
+    generateTitleBoundaryReady: true,
     generateTitleWiredToGateway: false,
+    postMessageImplemented: false,
     sendWiredToGateway: false,
-    note: 'Gateway локально формирует preview UserDataXml. GetDocumentTypes/GenerateTitleXml существуют как серверные функции, но внешние вызовы и отправка не открыты до sandbox-проверки.',
+    note: 'Gateway локально формирует UserDataXml preview. Server-only boundary для GenerateTitleXml подготовлен, но не опубликован как gateway route; подписание и PostMessage не реализованы.',
   }
 }
