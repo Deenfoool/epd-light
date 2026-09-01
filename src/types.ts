@@ -1,6 +1,17 @@
 export type DocStatus = 'draft' | 'incomplete' | 'ready' | 'archived'
 export type OrgType = 'org' | 'ip'
 
+export type RussianAddressDraft = {
+  zipCode: string
+  region: string
+  city: string
+  settlement: string
+  street: string
+  building: string
+  corpus: string
+  apartment: string
+}
+
 export type Party = {
   kind: OrgType
   name: string
@@ -9,8 +20,10 @@ export type Party = {
   phone: string
   email: string
   address: string
-  /** Идентификатор участника ЭДО у выбранного оператора. Не обязателен до интеграции. */
+  /** Идентификатор участника ЭДО/FNS participant id у выбранного оператора. */
   edoId?: string
+  /** Структурированная версия российского адреса для operator/UserDataXml mapping. */
+  russianAddress?: RussianAddressDraft
 }
 
 export type CargoItem = {
@@ -42,6 +55,8 @@ export type EtrnData = {
     unloadDate: string
     unloadTime: string
     note: string
+    loadRussianAddress?: RussianAddressDraft
+    unloadRussianAddress?: RussianAddressDraft
     /** Фактические данные погрузки, если они уже известны к моменту подготовки Т1. */
     loadArrival?: string
     loadDeparture?: string
