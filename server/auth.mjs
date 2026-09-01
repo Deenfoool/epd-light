@@ -89,7 +89,7 @@ export async function authenticateGatewayRequest(req, config, { verifyToken = de
     if (config.clientId && String(payload?.client_id || '') !== config.clientId) {
       return { ok: false, status: 403, error: 'auth_wrong_client', message: 'JWT client_id is not allowed' }
     }
-    return {
+    const result = {
       ok: true,
       mode: 'supabase',
       subject,
@@ -100,6 +100,10 @@ export async function authenticateGatewayRequest(req, config, { verifyToken = de
         exp: Number(payload?.exp || 0),
       },
     }
+    // Needed only for server-to-server calls to Supabase Data API under the user's RLS context.
+    // Non-enumerable prevents accidental JSON serialization in diagnostics/audit objects.
+    Object.defineProperty(result, 'accessToken', { value: token, enumerable: false, writable: false })
+    return result
   } catch {
     return { ok: false, status: 401, error: 'auth_invalid', message: 'Access token verification failed' }
   }
@@ -111,5 +115,7 @@ export const GATEWAY_AUTH_POLICY = Object.freeze({
   audience: 'authenticated',
   acceptedAlgorithms: ALLOWED_ALGORITHMS,
   sharedJwtSecretAccepted: false,
+  verifiedTokenAvailableToServerRepository: true,
+  accessTokenEnumerable: false,
   tokensLogged: false,
 })
