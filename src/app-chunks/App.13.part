@@ -1,8 +1,2 @@
-    }
-    create()
-  },[onCreated])
-  return <Card><div className="loading-inline"><RefreshCw className="spin" size={18}/>Создаём черновик…</div></Card>
-}
-
 function Documents({docs,reload}:{docs:DocumentRow[],reload:()=>void}){const [q,setQ]=useState('');const [filter,setFilter]=useState('all');const shown=docs.filter(d=>(filter==='all'||d.status===filter)&&[d.doc_number,d.data.shipper.name,d.data.consignee.name,d.data.carrier.name,d.data.route.loadAddress,d.data.route.unloadAddress].join(' ').toLowerCase().includes(q.toLowerCase()));return <><div className="page-title"><div><h1>Документы</h1><p>Черновики электронной транспортной накладной.</p></div><Button onClick={()=>go('/app/documents/new')}><Plus size={16}/>Новая ЭТрН</Button></div><Card><div className="toolbar"><div className="search"><Search size={17}/><Input placeholder="Поиск по документам" value={q} onChange={(e:any)=>setQ(e.target.value)}/></div><Select value={filter} onChange={(e:any)=>setFilter(e.target.value)}><option value="all">Все статусы</option><option value="draft">Черновик</option><option value="incomplete">Требует заполнения</option><option value="ready">Готов</option><option value="archived">Архив</option></Select></div><DocTable docs={shown} onReload={reload}/></Card></>}
 
