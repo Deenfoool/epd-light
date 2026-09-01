@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EPD Light encrypted PostgreSQL backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=epd-light-backup.service
+
+[Install]
+WantedBy=timers.target
