@@ -67,6 +67,7 @@ export function buildOperatorDraft(doc: DocumentRow) {
       warnings: readiness.warnings,
     },
     document: {
+      internalId: doc.id,
       number: doc.doc_number,
       date: doc.doc_date,
       orderNumber: d.terms.orderNumber ?? '',
@@ -159,6 +160,7 @@ export function buildOperatorDraft(doc: DocumentRow) {
       'LoadingPartyDetails и LoadingOwnerDetails генерируются только при явно заполненных пользователем данных; отсутствие этих блоков пока не трактуется как XSD-ошибка',
       'datetime-local не содержит часовой пояс; текущий preview использует EnablingTimeZone=0 и не должен идти в GenerateTitleXml до sandbox-проверки',
       'ИП и иные типы участников должны быть проверены по актуальному UserDataXsd до генерации',
+      'для внешнего вызова backend обязан заново загрузить документ по document.internalId и проверить владельца по JWT sub; браузерский payload не является авторитетным',
       'формирование имени итогового XML и транспортного контейнера',
       'подписание КЭП/УНЭП и юридически значимые статусы',
     ],
