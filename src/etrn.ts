@@ -1,4 +1,4 @@
-import type { CargoItem, DocStatus, DocumentRow, EtrnData, Party } from './types'
+import type { CargoItem, DocStatus, DocumentRow, EtrnData, Party, RussianAddressDraft } from './types'
 
 const id = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)
 
@@ -17,7 +17,12 @@ export const FNS_ETRN_REFERENCE = {
   officialDraftUrl: 'https://www.nalog.gov.ru/rn77/related_activities/el_doc/el_bus_entities/approved_formats/16631750/',
 } as const
 
-export const emptyParty = (): Party => ({ kind: 'org', name: '', inn: '', kpp: '', phone: '', email: '', address: '', edoId: '' })
+export const emptyRussianAddress = (): RussianAddressDraft => ({
+  zipCode: '', region: '', city: '', settlement: '', street: '', building: '', corpus: '', apartment: '',
+})
+export const emptyParty = (): Party => ({
+  kind: 'org', name: '', inn: '', kpp: '', phone: '', email: '', address: '', edoId: '', russianAddress: emptyRussianAddress(),
+})
 export const emptyCargo = (): CargoItem => ({
   id: id(), name: '', places: '', unit: 'шт', weight: '', value: '', packaging: '', conditions: '',
   state: '', marking: '', packagingMethod: '', packagingCode: '', currency: '643',
@@ -26,6 +31,7 @@ export const emptyEtrn = (): EtrnData => ({
   shipper: emptyParty(), consignee: emptyParty(), carrier: emptyParty(),
   route: {
     loadAddress: '', loadDate: '', loadTime: '', unloadAddress: '', unloadDate: '', unloadTime: '', note: '',
+    loadRussianAddress: emptyRussianAddress(), unloadRussianAddress: emptyRussianAddress(),
     loadArrival: '', loadDeparture: '', massMethod: '', actualWeight: '', actualPlaces: '',
   },
   cargo: [emptyCargo()],
@@ -41,6 +47,13 @@ export const emptyEtrn = (): EtrnData => ({
   signer: { fullName: '', position: '' },
 })
 
+const normalizeAddress = (input: Partial<RussianAddressDraft> | null | undefined): RussianAddressDraft => ({
+  ...emptyRussianAddress(), ...(input ?? {}),
+})
+const normalizeParty = (base: Party, input: Partial<Party> | null | undefined): Party => ({
+  ...base, ...(input ?? {}), russianAddress: normalizeAddress(input?.russianAddress),
+})
+
 /** Makes older JSON drafts safe after the draft model grows. */
 export function normalizeEtrn(input: Partial<EtrnData> | null | undefined): EtrnData {
   const base = emptyEtrn()
@@ -48,10 +61,15 @@ export function normalizeEtrn(input: Partial<EtrnData> | null | undefined): Etrn
   return {
     ...base,
     ...d,
-    shipper: { ...base.shipper, ...(d.shipper ?? {}) },
-    consignee: { ...base.consignee, ...(d.consignee ?? {}) },
-    carrier: { ...base.carrier, ...(d.carrier ?? {}) },
-    route: { ...base.route, ...(d.route ?? {}) },
+    shipper: normalizeParty(base.shipper, d.shipper),
+    consignee: normalizeParty(base.consignee, d.consignee),
+    carrier: normalizeParty(base.carrier, d.carrier),
+    route: {
+      ...base.route,
+      ...(d.route ?? {}),
+      loadRussianAddress: normalizeAddress(d.route?.loadRussianAddress),
+      unloadRussianAddress: normalizeAddress(d.route?.unloadRussianAddress),
+    },
     cargo: Array.isArray(d.cargo) && d.cargo.length
       ? d.cargo.map((x) => ({ ...emptyCargo(), ...x, id: x.id || id() }))
       : [emptyCargo()],
@@ -62,11 +80,13 @@ export function normalizeEtrn(input: Partial<EtrnData> | null | undefined): Etrn
 }
 
 export const statusLabel: Record<DocStatus,string> = {
-  draft: 'Черновик', incomplete: 'Требует заполнения', ready: 'Готов к передаче оператору', archived: 'Архив'
+  draft: 'Черновик', incomplete: 'Требует заполнения', ready: 'Черновик готов', archived: 'Архив'
 }
 export const validInn = (v:string) => /^\d{10}$|^\d{12}$/.test(v.trim())
 export type IssueKind = 'required' | 'operator' | 'recommended'
 export type Issue = { field:string; message:string; step:number; kind:IssueKind }
+
+const addressCandidateReady = (a: RussianAddressDraft | undefined) => Boolean(a?.region.trim() && (a?.city.trim() || a?.settlement.trim()))
 
 export function validateEtrn(raw:EtrnData): Issue[] {
   const d = normalizeEtrn(raw)
@@ -79,18 +99,21 @@ export function validateEtrn(raw:EtrnData): Issue[] {
     if(!p.inn.trim()) add(label,'не указан ИНН',1)
     else if(!validInn(p.inn)) add(label,'ИНН должен содержать 10 или 12 цифр',1)
     if(p.kind==='org'&&!p.kpp.trim()) add(label,'рекомендуется указать КПП организации',1,'recommended')
-    if(!p.address.trim()) add(label,'для маппинга Т1 нужен адрес или его структурированное представление',1,'operator')
+    if(!p.address.trim()) add(label,'не указан читаемый адрес',1,'operator')
+    if(!addressCandidateReady(p.russianAddress)) add(label,'для UserDataXml заполните структурированный российский адрес: регион и город/населённый пункт',1,'operator')
     if(!p.phone.trim()&&!p.email.trim()) add(label,'нет телефона или email',1,'operator')
-    if(!p.edoId?.trim()) add(label,'ID участника ЭДО будет нужен/разрешён на стороне выбранного оператора',1,'recommended')
+    if(!p.edoId?.trim()) add(label,'ID участника ЭДО/FNS participant id будет нужен для прямого UserDataXml mapping',1,'operator')
   }
   if(!d.route.loadAddress.trim()) add('Маршрут','не указан адрес погрузки',2)
   if(!d.route.unloadAddress.trim()) add('Маршрут','не указан адрес выгрузки',2)
+  if(!addressCandidateReady(d.route.loadRussianAddress)) add('Погрузка','не заполнен структурированный адрес погрузки для UserDataXml',2,'operator')
+  if(!addressCandidateReady(d.route.unloadRussianAddress)) add('Выгрузка','не заполнен структурированный адрес выгрузки для UserDataXml',2,'operator')
   if(!d.route.loadDate) add('Маршрут','не указана дата погрузки',2)
   if(!d.route.loadTime) add('Погрузка','рекомендуется указать заявленное время погрузки',2,'operator')
   if(!d.route.unloadDate) add('Маршрут','не указана плановая дата выгрузки',2,'recommended')
   if(!d.route.loadArrival) add('Погрузка','фактическое время прибытия заполняется, когда оно известно',2,'operator')
   if(!d.route.loadDeparture) add('Погрузка','фактическое время убытия заполняется, когда оно известно',2,'operator')
-  if(!d.route.massMethod?.trim()) add('Погрузка','не указан метод определения массы',2,'operator')
+  if(!d.route.massMethod?.trim()) add('Погрузка','не указан код/метод определения массы',2,'operator')
 
   const cargo=d.cargo.filter(x=>x.name.trim())
   if(!cargo.length) add('Груз','не добавлено ни одной позиции',3)
@@ -101,6 +124,7 @@ export function validateEtrn(raw:EtrnData): Issue[] {
     if(!x.state?.trim()) add(`Груз #${i+1}`,'не указано состояние груза',3,'operator')
     if(!x.packagingMethod?.trim()) add(`Груз #${i+1}`,'не указан способ упаковки',3,'operator')
     if(!x.marking?.trim()) add(`Груз #${i+1}`,'не указана маркировка либо отметка об её отсутствии',3,'operator')
+    if(!x.packagingCode?.trim()) add(`Груз #${i+1}`,'не указан код вида тары для UserDataXml',3,'operator')
     if(x.value && !x.currency?.trim()) add(`Груз #${i+1}`,'для объявленной стоимости нужен код валюты',3,'operator')
   })
 
@@ -108,12 +132,12 @@ export function validateEtrn(raw:EtrnData): Issue[] {
   if(!d.transport.driverName.trim()) add('Водитель','не указано ФИО',4)
   if(!d.transport.driverPhone.trim()) add('Водитель','не указан телефон',4,'operator')
   if(!d.transport.vehicleType?.trim()) add('Транспорт','не указан тип транспортного средства',4,'operator')
-  if(!d.transport.ownershipType?.trim()) add('Транспорт','не указан тип владения транспортным средством',4,'operator')
+  if(!d.transport.ownershipType?.trim()) add('Транспорт','не указан тип/код владения транспортным средством',4,'operator')
   if(!d.transport.driverLicenseSeries?.trim()) add('Водитель','не указана серия водительского удостоверения',4,'operator')
   if(!d.transport.driverLicenseNumber?.trim() && !d.transport.driverLicense?.trim()) add('Водитель','не указан номер водительского удостоверения',4,'operator')
   if(!d.transport.driverLicenseDate) add('Водитель','не указана дата выдачи водительского удостоверения',4,'operator')
-  if(!d.transport.waybillNumber?.trim()) add('Путевой лист','не указан номер путевого листа',4,'operator')
-  if(!d.transport.waybillDate) add('Путевой лист','не указана дата путевого листа',4,'operator')
+  if(!d.transport.waybillNumber?.trim()) add('Путевой лист','не указан номер путевого листа',4,'recommended')
+  if(!d.transport.waybillDate) add('Путевой лист','не указана дата путевого листа',4,'recommended')
 
   if(!d.terms.orderNumber?.trim()) add('Основание перевозки','не указан номер заказа/заявки',5,'operator')
   if(!d.terms.orderDate) add('Основание перевозки','не указана дата заказа/заявки',5,'operator')
@@ -141,8 +165,8 @@ export function exportJson(doc:DocumentRow){
   const data = normalizeEtrn(doc.data)
   return {
     documentType:'ЭТрН (внутренний черновик)',
-    draftModelVersion:2,
-    schemaVersion:'epd-light/draft-2',
+    draftModelVersion:3,
+    schemaVersion:'epd-light/draft-3',
     fnsReference:FNS_ETRN_REFERENCE,
     disclaimer:'Черновик. Не является юридически значимым перевозочным документом, не подписан КЭП, не проверен по XSD ФНС и не передан в ГИС ЭПД.',
     number:doc.doc_number,date:doc.doc_date,status:statusLabel[doc.status],updatedAt:doc.updated_at,
