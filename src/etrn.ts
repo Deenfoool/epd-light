@@ -1,4 +1,4 @@
-import type { CargoItem, DocStatus, DocumentRow, EtrnData, Party, RussianAddressDraft } from './types'
+import type { CargoItem, DocStatus, DocumentRow, EtrnData, LoadingDetailsDraft, Party, RussianAddressDraft } from './types'
 
 const id = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)
 
@@ -20,6 +20,9 @@ export const FNS_ETRN_REFERENCE = {
 export const emptyRussianAddress = (): RussianAddressDraft => ({
   zipCode: '', region: '', city: '', settlement: '', street: '', building: '', corpus: '', apartment: '',
 })
+export const emptyLoadingDetails = (): LoadingDetailsDraft => ({
+  matchingShipper: '', employeeFullName: '', employeePosition: '', employeeResponsibilities: '', partyInn: '', ownerType: '', ownerInn: '',
+})
 export const emptyParty = (): Party => ({
   kind: 'org', name: '', inn: '', kpp: '', phone: '', email: '', address: '', edoId: '', russianAddress: emptyRussianAddress(),
 })
@@ -34,6 +37,7 @@ export const emptyEtrn = (): EtrnData => ({
     loadRussianAddress: emptyRussianAddress(), unloadRussianAddress: emptyRussianAddress(),
     loadArrival: '', loadDeparture: '', massMethod: '', actualWeight: '', actualPlaces: '',
   },
+  loadingDetails: emptyLoadingDetails(),
   cargo: [emptyCargo()],
   transport: {
     brand: '', model: '', plate: '', trailerPlate: '', driverName: '', driverPhone: '', driverLicense: '',
@@ -70,6 +74,7 @@ export function normalizeEtrn(input: Partial<EtrnData> | null | undefined): Etrn
       loadRussianAddress: normalizeAddress(d.route?.loadRussianAddress),
       unloadRussianAddress: normalizeAddress(d.route?.unloadRussianAddress),
     },
+    loadingDetails: { ...emptyLoadingDetails(), ...(d.loadingDetails ?? {}) },
     cargo: Array.isArray(d.cargo) && d.cargo.length
       ? d.cargo.map((x) => ({ ...emptyCargo(), ...x, id: x.id || id() }))
       : [emptyCargo()],
@@ -117,6 +122,22 @@ export function validateEtrn(raw:EtrnData): Issue[] {
   if(!d.route.loadArrival) add('Погрузка','фактическое время прибытия заполняется, когда оно известно',2,'operator')
   if(!d.route.loadDeparture) add('Погрузка','фактическое время убытия заполняется, когда оно известно',2,'operator')
   if(!d.route.massMethod?.trim()) add('Погрузка','не указан код/метод определения массы',2,'operator')
+
+  const ld=d.loadingDetails??emptyLoadingDetails()
+  const partyTouched=[ld.matchingShipper,ld.employeeFullName,ld.employeePosition,ld.employeeResponsibilities,ld.partyInn].some(x=>String(x||'').trim())
+  if(partyTouched){
+    if(!['0','1'].includes(ld.matchingShipper)) add('Лицо погрузки','MatchingShipper должен быть 0 или 1',2,'operator')
+    if(!ld.employeeFullName.trim()) add('Лицо погрузки','не указано ФИО сотрудника',2,'operator')
+    if(!ld.employeePosition.trim()) add('Лицо погрузки','не указана должность сотрудника',2,'operator')
+    const effectiveInn=ld.partyInn.trim()||(ld.matchingShipper==='1'?d.shipper.inn:'')
+    if(!validInn(effectiveInn)) add('Лицо погрузки','нужен корректный ИНН; при MatchingShipper=1 можно использовать ИНН грузоотправителя',2,'operator')
+  }
+  const ownerTouched=[ld.ownerType,ld.ownerInn].some(x=>String(x||'').trim())
+  if(ownerTouched){
+    if(!ld.ownerType.trim()) add('Владелец места погрузки','не указан код Type из UserDataXsd',2,'operator')
+    if(!validInn(ld.ownerInn)) add('Владелец места погрузки','нужен корректный ИНН',2,'operator')
+  }
+  if(!partyTouched&&!ownerTouched) add('Погрузка','LoadingPartyDetails и LoadingOwnerDetails пока не заполнены; их обязательность должна быть подтверждена актуальным UserDataXsd',2,'recommended')
 
   const cargo=d.cargo.filter(x=>x.name.trim())
   if(!cargo.length) add('Груз','не добавлено ни одной позиции',3)
@@ -168,8 +189,8 @@ export function exportJson(doc:DocumentRow){
   const data = normalizeEtrn(doc.data)
   return {
     documentType:'ЭТрН (внутренний черновик)',
-    draftModelVersion:3,
-    schemaVersion:'epd-light/draft-3',
+    draftModelVersion:4,
+    schemaVersion:'epd-light/draft-4',
     fnsReference:FNS_ETRN_REFERENCE,
     disclaimer:'Черновик. Не является юридически значимым перевозочным документом, не подписан КЭП, не проверен по XSD ФНС и не передан в ГИС ЭПД.',
     number:doc.doc_number,date:doc.doc_date,status:statusLabel[doc.status],updatedAt:doc.updated_at,
