@@ -1,8 +1,14 @@
 # Развёртывание ЭПД Лайт
 
-## 1. Демо-режим
+## Режимы
 
-Если переменные Supabase не заданы, приложение запускается как локальное демо. Данные сохраняются в `localStorage` текущего браузера и не отправляются в базу.
+Проект сейчас поддерживает три разных режима, которые нельзя смешивать:
+
+1. **Demo** — localStorage/GitHub Pages, без backend и реальных документов.
+2. **Cloud app** — Auth + PostgreSQL/Supabase + private gateway, но operator mode `disabled`.
+3. **Kontur sandbox** — тот же cloud app, но gateway дополнительно может выполнить `GenerateTitleXml`. Подписание и `PostMessage` всё равно запрещены.
+
+## 1. Demo
 
 ```bash
 npm install
@@ -10,179 +16,277 @@ npm run preflight
 npm run dev
 ```
 
-Такой режим подходит только для демонстрации интерфейса и ручного тестирования.
+Без Supabase env данные остаются в браузере.
 
-## 2. Облачный режим разработки
+Публичный GitHub Pages стенд нужен только для UI-демонстрации и не является production-контуром.
 
-Frontend использует две переменные:
+## 2. Production data/auth prerequisites
+
+Перед запуском cloud app нужны:
 
 ```env
-VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_PUBLIC_ANON_KEY
+VITE_SUPABASE_URL=https://YOUR_DATA_HOST
+VITE_SUPABASE_ANON_KEY=PUBLIC_KEY
+
+EPD_GATEWAY_AUTH_MODE=supabase
+EPD_AUTH_SUPABASE_URL=https://YOUR_DATA_HOST
+EPD_AUTH_AUDIENCE=authenticated
+
+EPD_DATA_SUPABASE_URL=https://YOUR_DATA_HOST
+EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_KEY
 ```
 
-Все переменные с префиксом `VITE_` попадают в клиентский JavaScript и **считаются публичными**.
+Frontend key и Data API key должны быть публичным anon/publishable key, **не `service_role`**.
 
-Нельзя помещать в `VITE_*`:
-
-- `service_role` ключ Supabase;
-- API-ключ оператора ИС ЭПД;
-- приватные ключи;
-- материалы КЭП;
-- токены, позволяющие подписывать или отправлять ЭПД от имени организации.
-
-Перед запуском облачного режима примените **все миграции по порядку**:
+Примените миграции:
 
 ```text
 supabase/migrations/202609010001_init.sql
 supabase/migrations/202609010002_extend_directories_t1.sql
 ```
 
-Вторая миграция добавляет в справочники повторно используемые T1-поля: тип контрагента, BoxId/ID ЭДО, структурированный адрес, параметры ТС и раздельные реквизиты водительского удостоверения. Без неё новые формы справочников нельзя считать совместимыми с облачной БД.
-
-RLS должен оставаться включённым для всех пользовательских таблиц.
-
-## 3. Только frontend через Docker
-
-Сборка:
-
-```bash
-docker build \
-  --build-arg VITE_SUPABASE_URL="https://your-public-api.example.ru" \
-  --build-arg VITE_SUPABASE_ANON_KEY="your-public-anon-key" \
-  -t epd-light:latest .
-```
-
-Запуск:
-
-```bash
-docker run --rm -p 8080:8080 epd-light:latest
-```
-
-Проверка:
-
-```bash
-curl http://127.0.0.1:8080/healthz
-```
-
-В образе используется nginx с SPA fallback, поэтому прямые переходы на `/app/...` должны возвращать `index.html`, а не 404.
-
-## 4. Frontend + private backend gateway через Docker Compose
-
-Для дальнейшей разработки рекомендуется уже этот режим:
-
-```bash
-cp .env.example .env
-# заполнить только публичные VITE_* параметры
-
-docker compose up -d --build
-```
-
-Открыть:
+RLS `documents_own` должна оставаться активной:
 
 ```text
-http://SERVER_IP:8080
+auth.uid() = user_id
 ```
 
-Проверка frontend:
+Backend sandbox flow специально читает документ через Data API под пользовательским JWT, чтобы эта RLS оставалась авторитетной.
+
+## 3. Production env-check до Docker
+
+Скопируйте пример:
 
 ```bash
-curl http://127.0.0.1:8080/healthz
+cp .env.example .env.production
 ```
 
-Проверка gateway через nginx:
+Заполните значения и выполните:
 
 ```bash
-curl http://127.0.0.1:8080/api/operator/capabilities
+set -a
+. ./.env.production
+set +a
+npm run deploy:check
 ```
 
-Gateway работает в приватной Docker-сети и его порт `8787` наружу не публикуется.
+Checker останавливает запуск при типичных опасных настройках:
 
-В MVP ответ capabilities должен показывать:
+- gateway auth не `supabase`;
+- HTTP URL вместо HTTPS;
+- отсутствующий Data API public key;
+- `service_role` вместо public key;
+- wildcard CORS;
+- подозрительный секрет в `VITE_*`;
+- внешний rate limit выше обычного;
+- sandbox без Kontur BoxId/token.
+
+Сам checker не печатает значения секретов.
+
+## 4. Docker Compose
+
+Сборка и запуск:
+
+```bash
+docker compose --env-file .env.production up -d --build
+```
+
+Проверить контейнеры:
+
+```bash
+docker compose ps
+```
+
+Проверить frontend/nginx:
+
+```bash
+curl -i http://127.0.0.1:8080/healthz
+```
+
+Проверить gateway через nginx:
+
+```bash
+curl -s http://127.0.0.1:8080/api/operator/capabilities
+```
+
+Порт gateway `8787` не публикуется наружу.
+
+До намеренного sandbox-теста используйте:
+
+```env
+EPD_OPERATOR_PROVIDER=none
+EPD_OPERATOR_MODE=disabled
+```
+
+Внешняя отправка при этом и в sandbox остаётся:
 
 ```json
 {
-  "externalSendEnabled": false,
-  "xsdValidationEnabled": false
+  "externalSendEnabled": false
 }
 ```
 
-Если эти значения неожиданно меняются без отдельной реализации и проверки provider adapter, deployment нужно считать некорректным.
+## 5. HTTPS и внешний reverse proxy
 
-## 5. Проверка актуальности XSD ФНС
+Пользовательский домен должен открываться только по HTTPS.
 
-В среде с доступом в интернет:
+Целевая схема:
+
+```text
+Internet
+  -> :443 reverse proxy / TLS
+  -> 127.0.0.1:8080 project nginx
+  -> frontend or /api/*
+  -> private gateway:8787
+```
+
+Не публикуйте `8787` в firewall/security group.
+
+`EPD_ALLOWED_ORIGINS` должен содержать точные HTTPS origins, например:
+
+```env
+EPD_ALLOWED_ORIGINS=https://epd.example.ru
+```
+
+Не используйте `*`.
+
+После выбора production-домена добавьте его в разрешённые redirect URLs Supabase Auth.
+
+## 6. Auth smoke test
+
+Проверьте двумя отдельными тестовыми аккаунтами:
+
+1. пользователь A создаёт документ;
+2. пользователь B не видит документ A в приложении;
+3. прямой Data API запрос B к ID документа A не возвращает строку;
+4. operator gateway запрос без Bearer token получает `401`;
+5. operator gateway запрос с валидным JWT работает в рамках лимитов.
+
+Нельзя считать только frontend-фильтрацию проверкой разграничения доступа — нужна именно RLS.
+
+## 7. Local UserDataXml preview
+
+При `EPD_OPERATOR_MODE=disabled` можно тестировать:
+
+```text
+POST /api/operator/preflight
+POST /api/operator/kontur/userdata-preview
+```
+
+Эти endpoints не делают внешних operator-вызовов.
+
+## 8. Проверка схем
+
+ФНС:
 
 ```bash
 npm run fns:schema:check
 ```
 
-Команда скачивает опубликованную ФНС XSD черновика Т1, проверяет что ответ похож на XSD и выводит SHA-256.
-
-Для сохранения локальной копии в `.cache/fns`:
+После получения Kontur sandbox credentials:
 
 ```bash
-npm run fns:schema:save
+npm run kontur:schema:check
 ```
 
-Кэш не коммитится в Git. Изменение SHA-256 — повод повторно проверить mapping до production-отправки.
+Для сохранения XSD/UserDataXsd в игнорируемый cache:
 
-## 6. Контур данных для РФ
+```bash
+npm run kontur:schema:save
+```
 
-Production-размещение базы и обработку персональных данных нужно проектировать отдельно с учётом применимых требований российского законодательства, договоров с провайдерами и фактического состава данных. В справочнике водителей, например, могут находиться ФИО, телефон и данные удостоверения.
+Изменение версии/хэша схемы не должно автоматически менять mapping. Сначала ручная проверка.
 
-Практический вариант архитектуры:
+## 9. Намеренное включение Kontur sandbox
+
+Только после успешных auth/RLS/schema проверок измените server env:
+
+```env
+EPD_OPERATOR_PROVIDER=kontur
+EPD_OPERATOR_MODE=sandbox
+EPD_GATEWAY_AUTH_MODE=supabase
+EPD_KONTUR_BOX_ID=...
+EPD_KONTUR_ACCESS_TOKEN=...
+EPD_EXTERNAL_RATE_LIMIT_MAX=10
+```
+
+Повторно:
+
+```bash
+npm run deploy:check
+docker compose --env-file .env.production up -d --build
+```
+
+В `/api/operator/capabilities` должно появиться:
 
 ```text
-Браузер
-   |
-   | HTTPS
-   v
-nginx / ЭПД Лайт
-   |                 \
-   | public API       \ /api/operator/*
-   v                   v
-PostgreSQL/Auth       private gateway
-в production-контуре      |
-                          v
-                    API оператора ИС ЭПД
-                          |
-                          v
-                        ГИС ЭПД
+sandboxGenerateTitle.enabled = true
+sandboxGenerateTitle.ready   = true
 ```
 
-До юридической проверки production-схемы не следует считать обычный зарубежный Supabase-проект готовым контуром для коммерческой обработки персональных данных граждан РФ.
+После этого на карточке документа появляется `Kontur sandbox`.
 
-## 7. Интеграция с оператором
+Кнопка:
 
-Реальная отправка выполняется только backend-сервисом. Frontend формирует внутренний черновик и `Integration JSON`, который также **не является** документом ФНС.
+1. показывает явное подтверждение;
+2. отправляет gateway только `documentId`;
+3. gateway проверяет JWT;
+4. перечитывает document row через Supabase RLS;
+5. заново строит canonical candidate;
+6. вызывает `GenerateTitleXml`;
+7. возвращает XML;
+8. **не подписывает**;
+9. **не вызывает `PostMessage`**.
 
-Локальный `Kontur XML preview` строится внутри gateway без обращения в Диадок. Для реального `GenerateTitleXml` нужно отдельно получить операторский тестовый доступ и актуальный `UserDataXsd`.
+## 10. Что нельзя включать даже в sandbox
 
-См.:
+- `POST /api/operator/send`;
+- `PostMessage`;
+- автоматическое присвоение статуса «отправлен»;
+- signing flow без отдельной реализации;
+- `service_role` для обхода пользовательской RLS;
+- operator access token в `VITE_*`;
+- полный XML/JSON документа в application logs.
 
-- [`OPERATOR-INTEGRATION.md`](OPERATOR-INTEGRATION.md)
-- [`BACKEND-GATEWAY.md`](BACKEND-GATEWAY.md)
-- [`FNS-ETRN-MAPPING.md`](FNS-ETRN-MAPPING.md)
+## 11. Backup и recovery
 
-## 8. Минимальный checklist перед пилотом
+До первых реальных клиентов обязательно:
 
-- [ ] `npm run preflight` проходит;
-- [ ] `npm run gateway:test` проходит;
-- [ ] `npm run kontur:provider:test` проходит;
-- [ ] `npm run kontur:userdata:test` проходит;
-- [ ] `npm run build` проходит;
-- [ ] `npm run fns:schema:check` показывает ожидаемую схему;
-- [ ] Docker Compose поднимает frontend и gateway;
-- [ ] `/api/operator/capabilities` показывает `externalSendEnabled=false` до реальной интеграции;
-- [ ] применены обе SQL-миграции в порядке `001 -> 002`;
-- [ ] RLS проверен двумя разными тестовыми аккаунтами;
-- [ ] Redirect URL для Auth ограничены реальными доменами;
-- [ ] production env не содержит секретов в `VITE_*`;
-- [ ] gateway не публикуется отдельным портом наружу;
-- [ ] настроен HTTPS;
-- [ ] настроено резервное копирование PostgreSQL;
-- [ ] подготовлены финальные политика конфиденциальности и соглашение;
-- [ ] выбран оператор ИС ЭПД и получена его актуальная документация;
-- [ ] UserDataXml проверен по актуальному UserDataXsd;
-- [ ] XSD/API-валидация ЭТрН пройдена до открытия реальной отправки.
+- ежедневный backup PostgreSQL;
+- отдельное хранение backup от основного VPS;
+- шифрование backup;
+- тест восстановления на отдельной БД;
+- документированный RPO/RTO;
+- backup env/secrets через отдельное защищённое хранилище, не Git.
+
+## 12. Минимальный server-day checklist
+
+Перед открытием домена:
+
+- [ ] `npm run preflight`;
+- [ ] `npm run deploy:env:test`;
+- [ ] `npm run deploy:check` с production env;
+- [ ] `npm run audit:test`;
+- [ ] `npm run authorization:test`;
+- [ ] `npm run repository:test`;
+- [ ] `npm run rate-limit:test`;
+- [ ] `npm run gateway:test`;
+- [ ] `npm run auth:test`;
+- [ ] `npm run gateway:auth:test`;
+- [ ] `npm run kontur:userdata:test`;
+- [ ] `npm run kontur:generation:test`;
+- [ ] `npm run kontur:sandbox:test`;
+- [ ] `npm run build`;
+- [ ] обе SQL-миграции применены;
+- [ ] RLS проверена двумя аккаунтами;
+- [ ] HTTPS работает;
+- [ ] Auth redirect URL ограничены доменом;
+- [ ] `EPD_ALLOWED_ORIGINS` содержит только нужный HTTPS origin;
+- [ ] порт gateway не открыт наружу;
+- [ ] backup создан и тест восстановления запланирован;
+- [ ] `externalSendEnabled=false`;
+- [ ] production `PostMessage` отсутствует.
+
+## Контур данных РФ
+
+Production-размещение базы, backend, логов, backup и обработку персональных данных нужно строить с учётом применимых требований российского законодательства и фактического состава данных. Для проекта планируется российский production-контур; зарубежный demo/development backend не следует автоматически считать подходящим для реальных персональных данных.
