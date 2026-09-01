@@ -1,118 +1,185 @@
 # Backend gateway ЭПД Лайт
 
-`server/index.mjs` — server-side контур для будущей интеграции с оператором ИС ЭПД.
+`server/index.mjs` — private server-side контур для проверки черновиков и будущей интеграции с оператором ИС ЭПД.
 
-Текущая версия **намеренно не умеет отправлять документы оператору**. Gateway умеет локально проверять интеграционный черновик и строить preview Kontur T1 `UserDataXml` без внешних вызовов.
+Gateway принципиально разделяет три режима:
 
-## Зачем он нужен
+1. локальные проверки/preview без внешнего оператора;
+2. контролируемый sandbox `GenerateTitleXml`;
+3. production signing/`PostMessage`, который пока **не реализован**.
 
-Секреты оператора, сервисные токены, закрытые ключи и материалы электронной подписи нельзя помещать в React/Vite frontend. Любой `VITE_*` параметр попадает в браузер.
-
-Целевая цепочка:
+## Архитектура
 
 ```text
-Browser -> HTTPS -> nginx -> /api/operator/* -> private gateway -> provider adapter -> operator IS EPD
+Browser
+  |
+  | HTTPS + Supabase access token
+  v
+nginx
+  |
+  v
+private gateway
+  |-- JWT/JWKS verification
+  |-- rate limiting
+  |-- privacy-safe audit
+  |-- local preflight/UserDataXml preview
+  |
+  | sandbox only
+  v
+Supabase Data API under USER JWT
+  |
+  | RLS auth.uid() = user_id
+  v
+canonical documents row
+  |
+  v
+server mapper -> ownership check -> UserDataXml
+  |
+  v
+Kontur GenerateTitleXml
 ```
 
-Порт gateway в `docker-compose.yml` наружу не публикуется.
+Порт gateway `8787` наружу не публикуется. nginx проксирует `/api/*` во внутреннюю Docker-сеть.
+
+## Authentication
+
+При `EPD_GATEWAY_AUTH_MODE=supabase` gateway проверяет Supabase access token через JWKS:
+
+```text
+/auth/v1/.well-known/jwks.json
+```
+
+Проверяются подпись, issuer, audience, срок действия и `role=authenticated`. Используется allow-list асимметричных алгоритмов `RS256/ES256`.
+
+Общий JWT secret и `service_role` для gateway auth не используются.
+
+Внутри успешного auth-result пользовательский access token хранится non-enumerable: он нужен только для server-to-server RLS-запроса и не должен случайно сериализоваться в JSON/logs.
+
+В `EPD_OPERATOR_MODE != disabled` gateway вообще не стартует с отключённой auth-моделью.
+
+## Authorization и canonical document
+
+Для внешнего operator-вызова недостаточно проверить JWT. Браузерский Integration JSON считается **неавторитетным**.
+
+Sandbox flow принимает только `documentId`, после чего backend:
+
+1. использует уже проверенный пользовательский JWT;
+2. читает `/rest/v1/documents?id=eq.<documentId>`;
+3. передаёт публичный anon/publishable key в `apikey`;
+4. передаёт пользовательский JWT в `Authorization`;
+5. полагается на существующую RLS `auth.uid() = user_id`;
+6. заново строит canonical operator candidate;
+7. повторно сравнивает `row.user_id` с JWT `sub`;
+8. только после этого разрешает `GenerateTitleXml`.
+
+`service_role` этому пути не нужен и не должен использоваться.
+
+## Rate limiting
+
+В памяти gateway действуют три независимых лимита:
+
+- `EPD_AUTH_ATTEMPT_LIMIT_MAX` — до авторизации, по безопасному сетевому ключу;
+- `EPD_RATE_LIMIT_MAX` — обычные operator API запросы, по хешу JWT `sub`;
+- `EPD_EXTERNAL_RATE_LIMIT_MAX` — более строгий лимит реальных внешних обращений к оператору.
+
+Окно задаётся `EPD_RATE_LIMIT_WINDOW_MS`.
+
+Gateway возвращает `RateLimit-*` и `Retry-After` при `429`.
+
+nginx перезаписывает `X-Real-IP` и `X-Forwarded-For`, чтобы клиент не мог выбирать rate-limit bucket подложенным первым XFF-hop.
 
 ## Endpoints
 
 ### `GET /healthz`
 
-Проверка здоровья процесса.
+Healthcheck процесса.
 
 ### `GET /api/operator/capabilities`
 
-Возвращает режим gateway и безопасные capability-метаданные. Критические признаки сейчас всегда:
+Публичные безопасные capability-метаданные. Секреты не возвращаются.
 
-```json
-{
-  "externalSendEnabled": false,
-  "xsdValidationEnabled": false,
-  "localKonturUserDataPreview": {
-    "externalCallRequired": false,
-    "xsdValidated": false
-  }
-}
-```
+В ответе можно увидеть:
 
-Никакие токены или значения секретов в capabilities не возвращаются.
+- текущий `mode`;
+- auth policy;
+- rate limits;
+- готовность RLS repository;
+- готовность Kontur credentials;
+- готовность sandbox route;
+- `externalSendEnabled=false`.
 
 ### `POST /api/operator/preflight`
 
-Принимает `epd-light/operator-candidate-v1` и выполняет общий server-side sanity check структуры.
+Авторизованный structural preflight Integration JSON.
 
-Это **не XSD-валидация** и не обращение к оператору.
+Не является XSD-валидацией и не обращается к Контур.
 
 ### `POST /api/operator/kontur/userdata-preview`
 
-Принимает тот же Integration JSON, выполняет более строгую проверку первого адаптера Контур и локально строит `LogisticsWaybillConsignorTitle` UserDataXml для T1.
+Авторизованно строит локальный T1 `UserDataXml` preview.
 
-Endpoint:
+- external call: нет;
+- XSD validation: нет;
+- signing: нет;
+- PostMessage: нет.
 
-- не требует operator access token;
-- не вызывает `diadoc-api.kontur.ru`;
-- не вызывает `GenerateTitleXml`;
-- не подписывает документ;
-- не отправляет документ;
-- возвращает `externalCallMade: false`;
-- возвращает `contract.xsdValidated: false`.
+Для UI/разработки браузерский Integration JSON здесь допустим, потому что endpoint ничего не отправляет наружу.
 
-При неполных/неподдерживаемых данных отвечает `422` и списком ошибок. Первая версия блокирует ИП до проверки соответствующей ветки актуального UserDataXsd.
+### `POST /api/operator/kontur/generate-title-sandbox`
+
+Реальный внешний sandbox-вызов `GenerateTitleXml`.
+
+Endpoint активен только если одновременно:
+
+```env
+EPD_OPERATOR_PROVIDER=kontur
+EPD_OPERATOR_MODE=sandbox
+EPD_GATEWAY_AUTH_MODE=supabase
+```
+
+и настроены:
+
+- Supabase auth URL;
+- Supabase Data API URL;
+- публичный anon/publishable key;
+- Kontur BoxId;
+- Kontur access token.
+
+Тело запроса **строго**:
+
+```json
+{
+  "documentId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+}
+```
+
+Любые дополнительные поля, включая `candidate`, `data`, `xml`, отклоняются. Это защищает внешний вызов от подмены документа клиентом.
+
+Успешный ответ содержит сгенерированный XML и явные признаки:
+
+```json
+{
+  "externalCallMade": true,
+  "signed": false,
+  "sent": false
+}
+```
+
+Endpoint **не вызывает** `PostMessage`.
 
 ### `POST /api/operator/send`
 
-В текущей версии всегда отвечает `503 operator_send_disabled` независимо от `EPD_OPERATOR_MODE` и наличия переменных Контур.
-
-Этот endpoint нельзя открывать до выполнения всех пунктов:
-
-1. выбран конкретный оператор и получен тестовый доступ;
-2. через `GetDocumentTypes (V3)` проверена актуальная версия контракта;
-3. UserDataXml проверен реальным `GenerateTitleXml` в sandbox;
-4. реализована серверная аутентификация пользователя/организации;
-5. добавлена применимая XSD/форматная валидация;
-6. определён и протестирован механизм подписи;
-7. реализована idempotency и хранение внешних идентификаторов;
-8. проведён тестовый `PostMessage` в контуре оператора;
-9. юридически согласована production-модель.
-
-## Контур адаптера Контур
+Всегда отвечает:
 
 ```text
-server/providers/kontur-userdata.mjs
-  Integration JSON -> validation -> local UserDataXml preview
-
-server/providers/kontur.mjs
-  GetDocumentTypes (V3) -> XsdUrl/UserDataXsdUrl
-  GetContent -> XSD
-  GenerateTitleXml
-
-server/services/kontur-title.mjs
-  candidate -> UserDataXml -> GenerateTitleXml
-  server-only, gateway route отсутствует
+503 operator_send_disabled
 ```
 
-`GenerateTitleXml` существует как server-only boundary, но gateway её **не экспонирует**. Наличие access token в env не включает внешний обмен.
+Даже при `EPD_OPERATOR_MODE=sandbox`.
 
-## Переменные окружения
+## Privacy-safe audit
 
-```env
-EPD_OPERATOR_PROVIDER=none
-EPD_OPERATOR_MODE=disabled
-EPD_MAX_BODY_BYTES=524288
-EPD_ALLOWED_ORIGINS=
-
-# Только для server-side sandbox/CLI:
-EPD_KONTUR_BOX_ID=
-EPD_KONTUR_ACCESS_TOKEN=
-```
-
-`EPD_OPERATOR_MODE` не может включить `/send`: endpoint заблокирован кодом.
-
-## Privacy-safe аудит
-
-`server/audit.mjs` пишет по одной JSON-строке на завершённый ответ gateway. Используется строгий allow-list полей:
+`server/audit.mjs` пишет только allow-list метаданных:
 
 ```json
 {
@@ -128,40 +195,65 @@ EPD_KONTUR_ACCESS_TOKEN=
 }
 ```
 
-В audit log **не попадают**:
+Не логируются:
 
 - request body;
-- response XML/JSON документа;
+- Integration JSON;
+- UserDataXml/generated XML;
 - query string;
-- `Authorization` и другие headers;
-- access/refresh token;
-- BoxId из payload;
+- headers;
+- access/refresh/operator tokens;
+- BoxId документа;
 - ФИО, телефон, адрес, ИНН, ВУ;
-- свободный текст ошибки, если он не является коротким machine-safe кодом.
+- свободный exception text.
 
-Человеко-читаемые ошибки сворачиваются в общий `http_error`/`request_failed`; это снижает риск случайного вывода персональных данных через exception message.
+## Env
 
-Полные ЭТрН/Integration JSON/UserDataXml запрещено писать в обычные application logs. Если позже понадобится юридический/операторский аудит, его нужно проектировать отдельно с минимизацией данных и сроками хранения.
+Основные server-side параметры:
+
+```env
+EPD_OPERATOR_PROVIDER=none
+EPD_OPERATOR_MODE=disabled
+EPD_GATEWAY_AUTH_MODE=disabled
+EPD_AUTH_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+EPD_AUTH_AUDIENCE=authenticated
+EPD_DATA_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_KEY
+EPD_RATE_LIMIT_WINDOW_MS=60000
+EPD_RATE_LIMIT_MAX=60
+EPD_AUTH_ATTEMPT_LIMIT_MAX=120
+EPD_EXTERNAL_RATE_LIMIT_MAX=10
+EPD_KONTUR_BOX_ID=
+EPD_KONTUR_ACCESS_TOKEN=
+```
+
+Никакие server secrets не должны попадать в `VITE_*`.
 
 ## Проверки
-
-Без внешней сети предусмотрены:
 
 ```bash
 npm run preflight
 npm run audit:test
+npm run auth:test
+npm run authorization:test
+npm run repository:test
+npm run rate-limit:test
 npm run gateway:test
-npm run kontur:provider:test
+npm run gateway:auth:test
 npm run kontur:userdata:test
 npm run kontur:generation:test
+npm run kontur:sandbox:test
 ```
 
-`audit:test` проверяет strict allow-list и отсутствие утечки payload/token. `gateway:test` дополнительно отправляет тестовые ФИО/телефон/груз в POST body и проверяет, что эти значения не появляются в stdout gateway.
+`kontur:sandbox:test` использует только mock fetch и проверяет цепочку `documentId -> user JWT/RLS repository -> canonical mapper -> ownership -> GenerateTitleXml`, не обращаясь к реальному Контур.
 
-После получения sandbox-реквизитов отдельно выполняется:
+## Что всё ещё запрещено
 
-```bash
-npm run kontur:schema:check
-```
+До отдельного signing flow и реального операторского тестирования нельзя открывать:
 
-Эта команда использует `GetDocumentTypes (V3) + GetContent`, но не отправляет ЭТрН.
+- `PostMessage`;
+- production send;
+- статусы «передан/подписан/принят» по пользовательскому клику;
+- хранение operator access token во frontend;
+- доверие клиентскому XML/Integration JSON для внешнего вызова;
+- `service_role` как обход RLS в пользовательском operator flow.
