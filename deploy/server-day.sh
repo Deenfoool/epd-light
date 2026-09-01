@@ -40,6 +40,7 @@ run_node scripts/test-deployment-env.mjs
 run_node scripts/test-audit.mjs
 run_node scripts/test-authorization.mjs
 run_node scripts/test-supabase-repository.mjs
+run_node scripts/test-idempotency.mjs
 run_node scripts/test-rate-limit.mjs
 run_node scripts/test-gateway.mjs
 run_node scripts/test-kontur-userdata.mjs
