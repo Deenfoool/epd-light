@@ -74,6 +74,8 @@ export async function generateKonturSandboxTitleForDocument({
 
   return {
     ...execution.result,
+    externalCallMade: !execution.sharedInFlight,
+    externalResultShared: execution.sharedInFlight,
     idempotency: {
       idempotencyKey: identity.idempotencyKey,
       requestFingerprint: identity.requestFingerprint,
