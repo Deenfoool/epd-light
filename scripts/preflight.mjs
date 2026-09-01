@@ -21,6 +21,7 @@ const requiredSnippets = [
   'function DirectoryPage',
   'function ImportPage(',
   'function Integrations(',
+  'function RussianAddressEditor(',
   'ЧЕРНОВИК — НЕ ЯВЛЯЕТСЯ ПЕРЕВОЗОЧНЫМ ДОКУМЕНТОМ',
   'Статусы «Передан оператору», «Подписан» и «Принят ГИС ЭПД» недоступны',
   'dirty.current=true',
@@ -33,10 +34,13 @@ const requiredSnippets = [
   'buildOperatorDraft',
   'operatorReadiness',
   'Фактическое прибытие на погрузку',
+  'Структурированный адрес погрузки',
   'Серия ВУ',
   'Номер заказа / заявки',
   'не валидирует XML по XSD ФНС',
   '/api/operator/capabilities',
+  '/api/operator/kontur/userdata-preview',
+  'Kontur XML preview',
   'Gateway online',
 ]
 for (const snippet of requiredSnippets) if (!app.includes(snippet)) fail(`missing app invariant: ${snippet}`)
@@ -53,18 +57,28 @@ for (const snippet of ['interface OperatorAdapter', 'assertOperatorConfigured', 
 }
 
 const etrn = await readFile(path.join(root, 'src', 'etrn.ts'), 'utf8')
-for (const snippet of ['FNS_ETRN_REFERENCE', "knd: '1110339'", "formatVersion: '5.01'", 'ON_TRNACLGROT_1_973_01_05_01_02', 'normalizeEtrn', 'operatorReadiness']) {
-  if (!etrn.includes(snippet)) fail(`draft-v2 invariant missing: ${snippet}`)
+for (const snippet of ['FNS_ETRN_REFERENCE', "knd: '1110339'", "formatVersion: '5.01'", 'ON_TRNACLGROT_1_973_01_05_01_02', 'emptyRussianAddress', 'loadRussianAddress', 'normalizeEtrn', 'operatorReadiness', "schemaVersion:'epd-light/draft-3'"]) {
+  if (!etrn.includes(snippet)) fail(`draft-v3 invariant missing: ${snippet}`)
 }
 
 const operatorDraft = await readFile(path.join(root, 'src', 'operator-draft.ts'), 'utf8')
-for (const snippet of ['epd-light/operator-candidate-v1', 'не является XML ФНС', 'unresolvedByDesign']) {
+for (const snippet of ['epd-light/operator-candidate-v1', 'draftModelVersion: 3', 'loadingRussianAddress', 'unloadingRussianAddress', 'не является XML ФНС', 'unresolvedByDesign']) {
   if (!operatorDraft.includes(snippet)) fail(`operator draft invariant missing: ${snippet}`)
 }
 
 const gateway = await readFile(path.join(root, 'server', 'index.mjs'), 'utf8')
-for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'", "url.pathname === '/api/operator/send'", 'externalSendEnabled: false', "error: 'operator_send_disabled'", 'provider adapter не подключён']) {
+for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'", "url.pathname === '/api/operator/kontur/userdata-preview'", "url.pathname === '/api/operator/send'", 'externalSendEnabled: false', 'externalCallMade: false', "error: 'operator_send_disabled'"]) {
   if (!gateway.includes(snippet)) fail(`gateway fail-closed invariant missing: ${snippet}`)
+}
+
+const konturProvider = await readFile(path.join(root, 'server', 'providers', 'kontur.mjs'), 'utf8')
+for (const snippet of ["documentTypeNamedId: 'LogisticsWaybill'", "documentFunction: 'reception'", "documentVersion: 'kl_trn_mt_05_01'", 'userDataPreviewWiredToGateway: true', 'generateTitleWiredToGateway: false', 'sendWiredToGateway: false']) {
+  if (!konturProvider.includes(snippet)) fail(`Kontur provider invariant missing: ${snippet}`)
+}
+
+const konturUserData = await readFile(path.join(root, 'server', 'providers', 'kontur-userdata.mjs'), 'utf8')
+for (const snippet of ['validateKonturT1Candidate', 'buildKonturT1UserDataXml', '<LogisticsWaybillConsignorTitle', '<OrganizationReference', '<DeliveryAddres>', 'EnablingTimeZone="0"', 'xsdValidated: false']) {
+  if (!konturUserData.includes(snippet)) fail(`Kontur UserData preview invariant missing: ${snippet}`)
 }
 
 const compose = await readFile(path.join(root, 'docker-compose.yml'), 'utf8')
@@ -73,12 +87,14 @@ const nginxCompose = await readFile(path.join(root, 'deploy', 'nginx-compose.con
 if (!nginxCompose.includes('proxy_pass http://gateway:8787')) fail('nginx does not proxy /api to private gateway')
 
 const main = await readFile(path.join(root, 'src', 'main.tsx'), 'utf8')
-if (!main.includes("import './v2.css'")) fail('draft-v2 responsive CSS is not loaded')
+if (!main.includes("import './v2.css'")) fail('draft-v3 responsive CSS is not loaded')
 
 const schemaCheck = await readFile(path.join(root, 'scripts', 'check-fns-schema.mjs'), 'utf8')
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (!pkg.scripts?.build || !pkg.scripts?.prebuild || !pkg.scripts?.preflight || !pkg.scripts?.['fns:schema:check']) fail('required build/preflight/schema scripts missing')
+for (const script of ['build','prebuild','preflight','gateway:test','kontur:provider:test','kontur:userdata:test','fns:schema:check']) {
+  if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
+}
 
-console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, draft-v2, gateway and operator safety checks passed`)
+console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, draft-v3, Kontur UserData preview and fail-closed operator checks passed`)
