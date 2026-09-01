@@ -1,4 +1,4 @@
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const esc = (value) => String(value ?? '')
   .replaceAll('&', '&amp;')
@@ -58,7 +58,7 @@ function russianAddressXml(address) {
 function partyReferenceXml(party, role, errors) {
   if (party?.kind !== 'org') errors.push(`${role}: первая версия Kontur mapping поддерживает только организации через OrganizationReference`)
   const boxId = String(party?.edoId || '').trim()
-  if (!GUID_RE.test(boxId)) errors.push(`${role}: BoxId должен быть UUID/GUID Диадока`)
+  if (!GUID_RE.test(boxId)) errors.push(`${role}: BoxId должен быть GUID Диадока`)
   const phone = String(party?.phone || '').trim()
   if (!phone) errors.push(`${role}: для текущего UserDataXml mapping нужен телефон`)
   return `<OrganizationReference${attr('BoxId', boxId)}>${phone ? `<Phones>${tag('Phone', phone)}</Phones>` : ''}</OrganizationReference>`
@@ -117,6 +117,7 @@ export function validateKonturT1Candidate(input) {
 
   warnings.push('UserDataXml preview не является результатом GenerateTitleXml и не подтверждает соответствие итоговой XSD ФНС')
   warnings.push('Время из datetime-local формируется без часового пояса с EnablingTimeZone=0; перед боевым подключением это нужно проверить на sandbox оператора')
+  warnings.push('Публичный пример T1 содержит LoadingPartyDetails и LoadingOwnerDetails; эти блоки пока намеренно не генерируются до фиксации их обязательности по актуальному UserDataXsd')
   warnings.push('ИП и иные типы участников заблокированы до проверки соответствующей ветки актуального UserDataXsd')
   return { ok: errors.length === 0, errors, warnings }
 }
