@@ -6,6 +6,8 @@
   "scripts": {
     "preflight": "node scripts/preflight.mjs",
     "audit:test": "node scripts/test-audit.mjs",
+    "auth:test": "node scripts/test-auth.mjs",
+    "rate-limit:test": "node scripts/test-rate-limit.mjs",
     "gateway:test": "node scripts/test-gateway.mjs",
     "kontur:provider:test": "node scripts/test-kontur-provider.mjs",
     "kontur:userdata:test": "node scripts/test-kontur-userdata.mjs",
@@ -22,6 +24,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
+    "jose": "6.2.10",
     "lucide-react": "^0.575.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
