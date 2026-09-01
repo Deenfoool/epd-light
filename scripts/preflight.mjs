@@ -24,6 +24,12 @@ const requiredSnippets = [
   'ЧЕРНОВИК — НЕ ЯВЛЯЕТСЯ ПЕРЕВОЗОЧНЫМ ДОКУМЕНТОМ',
   'Готов к передаче оператору',
   'Статусы «Передан оператору», «Подписан» и «Принят ГИС ЭПД» недоступны',
+  'dirty.current=true',
+  "addEventListener('beforeunload',beforeUnload)",
+  'Базовая проверка пройдена',
+  'positiveNumber(r.places)',
+  'positiveNumber(r.weight)',
+  'https://www.nalog.gov.ru/rn77/related_activities/el_doc/el_bus_entities/edotransp/',
 ]
 for (const snippet of requiredSnippets) if (!app.includes(snippet)) fail(`missing app invariant: ${snippet}`)
 
@@ -33,7 +39,11 @@ for (const table of ['profiles','companies','vehicles','drivers','documents','in
 }
 if (!migration.includes('grant select, insert, update, delete on public.documents to authenticated')) fail('authenticated document grants missing')
 
-const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (!pkg.scripts?.build || !pkg.scripts?.prebuild) fail('build/prebuild scripts missing')
+const operator = await readFile(path.join(root, 'src', 'operator.ts'), 'utf8')
+if (!operator.includes('sendToOperatorDisabled')) fail('operator send guard missing')
+if (!operator.includes('server') && !operator.includes('browser')) fail('operator security boundary documentation missing')
 
-console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS checks passed`)
+const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+if (!pkg.scripts?.build || !pkg.scripts?.prebuild || !pkg.scripts?.preflight) fail('build/prebuild/preflight scripts missing')
+
+console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS and safety checks passed`)
