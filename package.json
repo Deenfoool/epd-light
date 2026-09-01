@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "preflight": "node scripts/preflight.mjs",
     "predev": "node scripts/assemble-app.mjs",
     "dev": "vite",
     "prebuild": "node scripts/assemble-app.mjs",
