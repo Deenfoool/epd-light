@@ -1,5 +1,5 @@
 import { buildKonturT1UserDataXml, validateKonturT1Candidate } from '../providers/kontur-userdata.mjs'
-import { KONTUR_T1_CONTRACT, generateKonturT1Xml, konturConfigStatus } from '../providers/kontur.mjs'
+import { KONTUR_T1_CONTRACT, generateKonturT1Xml, konturConfigFromEnv, konturConfigStatus } from '../providers/kontur.mjs'
 
 /**
  * Server-only boundary for the future sandbox integration.
@@ -23,7 +23,8 @@ export async function generateKonturT1FromCandidate({
     throw error
   }
 
-  const configStatus = konturConfigStatus(config)
+  const resolvedConfig = config ?? konturConfigFromEnv()
+  const configStatus = konturConfigStatus(resolvedConfig)
   if (!configStatus.configured) {
     const error = new Error(`Kontur server configuration incomplete: ${configStatus.missing.join(', ')}`)
     error.code = 'kontur_config_incomplete'
@@ -33,8 +34,8 @@ export async function generateKonturT1FromCandidate({
 
   const userDataXml = buildKonturT1UserDataXml(candidate)
   const generatedXml = await generateKonturT1Xml({
-    boxId: config.boxId,
-    accessToken: config.accessToken,
+    boxId: resolvedConfig.boxId,
+    accessToken: resolvedConfig.accessToken,
     userDataXml,
     fetchImpl,
     ...(baseUrl ? { baseUrl } : {}),
