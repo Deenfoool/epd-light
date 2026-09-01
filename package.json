@@ -15,6 +15,7 @@
     "kontur:provider:test": "node scripts/test-kontur-provider.mjs",
     "kontur:userdata:test": "node scripts/test-kontur-userdata.mjs",
     "kontur:generation:test": "node scripts/test-kontur-generation.mjs",
+    "kontur:sandbox:test": "node scripts/test-kontur-sandbox.mjs",
     "kontur:schema:check": "node scripts/check-kontur-schemas.mjs",
     "kontur:schema:save": "node scripts/check-kontur-schemas.mjs --save",
     "fns:schema:check": "node scripts/check-fns-schema.mjs",
