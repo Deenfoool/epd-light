@@ -39,7 +39,7 @@ supabase/migrations/202609010001_init.sql
 
 RLS должен оставаться включённым для всех пользовательских таблиц.
 
-## 3. Production frontend через Docker
+## 3. Только frontend через Docker
 
 Сборка:
 
@@ -64,7 +64,67 @@ curl http://127.0.0.1:8080/healthz
 
 В образе используется nginx с SPA fallback, поэтому прямые переходы на `/app/...` должны возвращать `index.html`, а не 404.
 
-## 4. Контур данных для РФ
+## 4. Frontend + private backend gateway через Docker Compose
+
+Для дальнейшей разработки рекомендуется уже этот режим:
+
+```bash
+cp .env.example .env
+# заполнить только публичные VITE_* параметры
+
+docker compose up -d --build
+```
+
+Открыть:
+
+```text
+http://SERVER_IP:8080
+```
+
+Проверка frontend:
+
+```bash
+curl http://127.0.0.1:8080/healthz
+```
+
+Проверка gateway через nginx:
+
+```bash
+curl http://127.0.0.1:8080/api/operator/capabilities
+```
+
+Gateway работает в приватной Docker-сети и его порт `8787` наружу не публикуется.
+
+В MVP ответ capabilities должен показывать:
+
+```json
+{
+  "externalSendEnabled": false,
+  "xsdValidationEnabled": false
+}
+```
+
+Если эти значения неожиданно меняются без отдельной реализации provider adapter, deployment нужно считать некорректным.
+
+## 5. Проверка актуальности XSD ФНС
+
+В среде с доступом в интернет:
+
+```bash
+npm run fns:schema:check
+```
+
+Команда скачивает опубликованную ФНС XSD черновика Т1, проверяет что ответ похож на XSD и выводит SHA-256.
+
+Для сохранения локальной копии в `.cache/fns`:
+
+```bash
+npm run fns:schema:save
+```
+
+Кэш не коммитится в Git. Изменение SHA-256 — повод повторно проверить mapping до production-отправки.
+
+## 6. Контур данных для РФ
 
 Production-размещение базы и обработку персональных данных нужно проектировать отдельно с учётом применимых требований российского законодательства, договоров с провайдерами и фактического состава данных. В справочнике водителей, например, могут находиться ФИО, телефон и данные удостоверения.
 
@@ -75,32 +135,43 @@ Production-размещение базы и обработку персонал�
    |
    | HTTPS
    v
-Frontend ЭПД Лайт
-   |
-   | public client credentials + RLS
-   v
-PostgreSQL/Auth в выбранном production-контуре
-
-Отдельно:
-Backend интеграций -> API аккредитованного оператора ИС ЭПД -> ГИС ЭПД
+nginx / ЭПД Лайт
+   |                 \
+   | public API       \ /api/operator/*
+   v                   v
+PostgreSQL/Auth       private gateway
+в production-контуре      |
+                          v
+                    API оператора ИС ЭПД
+                          |
+                          v
+                        ГИС ЭПД
 ```
 
 До юридической проверки production-схемы не следует считать обычный зарубежный Supabase-проект готовым контуром для коммерческой обработки персональных данных граждан РФ.
 
-## 5. Интеграция с оператором
+## 7. Интеграция с оператором
 
-Реальная отправка должна выполняться отдельным backend-сервисом. Frontend только формирует внутренний черновик и показывает безопасные статусы.
+Реальная отправка выполняется только backend-сервисом. Frontend формирует внутренний черновик и `Integration JSON`, который также **не является** документом ФНС.
 
-См. [`OPERATOR-INTEGRATION.md`](OPERATOR-INTEGRATION.md).
+См.:
 
-## 6. Минимальный checklist перед пилотом
+- [`OPERATOR-INTEGRATION.md`](OPERATOR-INTEGRATION.md)
+- [`BACKEND-GATEWAY.md`](BACKEND-GATEWAY.md)
+- [`FNS-ETRN-MAPPING.md`](FNS-ETRN-MAPPING.md)
+
+## 8. Минимальный checklist перед пилотом
 
 - [ ] `npm run preflight` проходит;
 - [ ] `npm run build` проходит;
+- [ ] `npm run fns:schema:check` показывает ожидаемую схему;
+- [ ] Docker Compose поднимает frontend и gateway;
+- [ ] `/api/operator/capabilities` показывает `externalSendEnabled=false` до реальной интеграции;
 - [ ] SQL-миграция применена;
 - [ ] RLS проверен двумя разными тестовыми аккаунтами;
 - [ ] Redirect URL для Auth ограничены реальными доменами;
 - [ ] production env не содержит секретов в `VITE_*`;
+- [ ] gateway не публикуется отдельным портом наружу;
 - [ ] настроен HTTPS;
 - [ ] настроено резервное копирование PostgreSQL;
 - [ ] подготовлены финальные политика конфиденциальности и соглашение;
