@@ -62,12 +62,13 @@ requireSnippets('gateway', gateway, [
   "url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'",
   "url.pathname === '/api/operator/kontur/userdata-preview'", "url.pathname === '/api/operator/send'",
   "url.pathname.startsWith('/api/operator/')", 'authenticateGatewayRequest', 'EXTERNAL_OPERATOR_AUTHORIZATION_POLICY',
-  'supabaseDocumentRepositoryPublicCapabilities', 'consumeRateLimit', 'rateLimitHeaders',
+  'supabaseDocumentRepositoryPublicCapabilities', 'KONTUR_SANDBOX_GENERATION_POLICY', 'generateKonturSandboxTitleForDocument',
+  'validateSandboxGenerateRequest', "operatorMode === 'sandbox'", "provider === 'kontur'", 'sandboxGenerateReady',
+  "scope: 'operator-external'", 'rateConfig.externalMax', 'maxExternalCallsPerAuthenticatedSubject',
   'externalSendEnabled: false', 'externalCallMade: false', "error: 'operator_send_disabled'", 'writeGatewayAudit', 'path: url.pathname',
 ])
-for (const forbiddenRoute of ['/api/operator/kontur/generate-title', '/api/operator/kontur/schemas']) {
-  if (gateway.includes(forbiddenRoute)) fail(`${forbiddenRoute} must not be exposed as a gateway route`)
-}
+if (gateway.includes("url.pathname === '/api/operator/kontur/generate-title'")) fail('non-sandbox GenerateTitleXml route must not exist')
+if (gateway.includes("url.pathname === '/api/operator/kontur/schemas'")) fail('schema discovery must not be exposed as a gateway route')
 if (gateway.includes('req.headers.authorization')) fail('gateway routing/audit must delegate Authorization handling to auth module')
 
 const auth = await read('server', 'auth.mjs')
@@ -85,8 +86,9 @@ const authorization = await read('server', 'authorization.mjs')
 requireSnippets('external authorization', authorization, [
   'authorizeExternalOperatorDocument', 'ownerSubject', "error: 'document_not_available'", "error: 'document_identity_mismatch'",
   'serverLoadedDocumentRequired: true', 'ownershipMatchRequired: true', 'clientPayloadAuthoritative: false',
+  'sandboxGenerateTitleRouteImplemented: true', 'sandboxGenerateTitleOnly: true', 'productionSendRouteEnabled: false',
   'backendDocumentRepositoryAdapterReady: true', 'supabaseRlsUsed: true', 'serviceRoleRequired: false',
-  'runtimeRepositoryConfigurationRequired: true', 'gatewayExternalRouteEnabled: false',
+  'runtimeRepositoryConfigurationRequired: true',
 ])
 
 const canonicalMapper = await read('server', 'mappers', 'operator-candidate.mjs')
@@ -105,6 +107,7 @@ if (repository.includes('service_role')) fail('RLS document repository must not 
 const rateLimit = await read('server', 'rate-limit.mjs')
 requireSnippets('rate limiting', rateLimit, [
   'consumeRateLimit', 'requestNetworkKey', "req?.headers?.['x-real-ip']", 'authenticatedRateKey', 'retry-after', 'createHash',
+  'EPD_EXTERNAL_RATE_LIMIT_MAX', 'externalMax',
 ])
 const audit = await read('server', 'audit.mjs')
 requireSnippets('privacy audit', audit, ["event: 'gateway_request'", 'createGatewayAuditEvent', 'writeGatewayAudit', 'auditErrorCode', 'SAFE_CODE_RE'])
@@ -132,11 +135,19 @@ requireSnippets('Kontur generation boundary', generation, [
   'serverLoadedDocumentRequiredForGateway: true', 'clientPayloadAuthoritative: false', 'gatewayRouteExposed: false',
   'callsPostMessage: false', 'signed: false', 'sent: false',
 ])
+const sandboxGeneration = await read('server', 'services', 'kontur-sandbox.mjs')
+requireSnippets('Kontur sandbox boundary', sandboxGeneration, [
+  'validateSandboxGenerateRequest', 'generateKonturSandboxTitleForDocument', "key !== 'documentId'", 'sandbox_payload_rejected',
+  'createSupabaseOwnedCandidateLoader', 'generateAuthorizedKonturT1', "gatewayRoute: '/api/operator/kontur/generate-title-sandbox'",
+  "enabledOperatorMode: 'sandbox'", 'clientDocumentPayloadAccepted: false', 'supabaseRlsReloadRequired: true',
+  'callsPostMessage: false', 'signsDocument: false', 'sendsDocument: false',
+])
 
 const compose = await read('docker-compose.yml')
 requireSnippets('Docker Compose', compose, [
   'gateway:', 'expose:', 'nginx-compose.conf', 'EPD_GATEWAY_AUTH_MODE', 'EPD_AUTH_SUPABASE_URL',
-  'EPD_DATA_SUPABASE_URL', 'EPD_DATA_SUPABASE_PUBLIC_KEY', 'EPD_RATE_LIMIT_MAX', 'EPD_KONTUR_ACCESS_TOKEN',
+  'EPD_DATA_SUPABASE_URL', 'EPD_DATA_SUPABASE_PUBLIC_KEY', 'EPD_RATE_LIMIT_MAX', 'EPD_EXTERNAL_RATE_LIMIT_MAX',
+  'EPD_KONTUR_ACCESS_TOKEN',
 ])
 const nginx = await read('deploy', 'nginx-compose.conf')
 requireSnippets('nginx proxy', nginx, [
@@ -152,13 +163,18 @@ const schemaCheck = await read('scripts', 'check-fns-schema.mjs')
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 const konturSchemaCheck = await read('scripts', 'check-kontur-schemas.mjs')
 requireSnippets('Kontur schema checker', konturSchemaCheck, ['discoverKonturT1Descriptor', 'getKonturContent', 'sha256', 'UserDataXsd', 'EPD_KONTUR_BOX_ID'])
+const sandboxTest = await read('scripts', 'test-kontur-sandbox.mjs')
+requireSnippets('Kontur sandbox test', sandboxTest, [
+  'documentId-only request', 'sandbox_payload_rejected', 'Bearer user-access-token', 'public-key',
+  "pathname === '/GenerateTitleXml'", 'crossAccountExternalCall === false',
+])
 
 const pkg = JSON.parse(await read('package.json'))
 for (const script of [
   'build','prebuild','preflight','audit:test','auth:test','authorization:test','repository:test','rate-limit:test',
-  'gateway:test','gateway:auth:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test',
+  'gateway:test','gateway:auth:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:sandbox:test',
   'kontur:schema:check','kontur:schema:save','fns:schema:check',
 ]) if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
 if (pkg.dependencies?.jose !== '6.2.10') fail('root jose dependency must stay pinned to tested version 6.2.10')
 
-console.log(`Preflight OK: ${parts.length} source parts, JWT/JWKS auth, RLS ownership repository, canonical mapping, rate limits, privacy audit, Docker gateway and fail-closed Kontur boundaries verified`)
+console.log(`Preflight OK: ${parts.length} source parts, JWT/JWKS auth, RLS ownership repository, canonical mapping, sandbox GenerateTitle boundary, rate limits, privacy audit, Docker gateway and fail-closed PostMessage/send verified`)
