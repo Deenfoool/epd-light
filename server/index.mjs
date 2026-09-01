@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { auditErrorCode, writeGatewayAudit } from './audit.mjs'
 import { GATEWAY_AUTH_POLICY, assertGatewayAuthConfig, authenticateGatewayRequest, gatewayAuthConfigFromEnv } from './auth.mjs'
+import { EXTERNAL_OPERATOR_AUTHORIZATION_POLICY } from './authorization.mjs'
 import { authenticatedRateKey, consumeRateLimit, rateLimitConfigFromEnv, rateLimitHeaders, requestNetworkKey } from './rate-limit.mjs'
 import { konturPublicCapabilities } from './providers/kontur.mjs'
 import { KONTUR_USERDATA_PREVIEW_CONTRACT, buildKonturT1UserDataXml, validateKonturT1Candidate } from './providers/kontur-userdata.mjs'
@@ -152,6 +153,7 @@ const server = createServer(async (req, res) => {
         requiredForOperatorApi: authConfig.mode === 'supabase',
         policy: GATEWAY_AUTH_POLICY,
       },
+      authorization: EXTERNAL_OPERATOR_AUTHORIZATION_POLICY,
       rateLimit: {
         windowMs: rateConfig.windowMs,
         maxPerAuthenticatedSubject: rateConfig.max,
@@ -160,7 +162,7 @@ const server = createServer(async (req, res) => {
       supportedCandidate: 'epd-light/operator-candidate-v1',
       localKonturUserDataPreview: KONTUR_USERDATA_PREVIEW_CONTRACT,
       providerAdapter: providerCapabilities(),
-      message: 'Gateway умеет локально собирать preview UserDataXml. Operator API защищён auth/rate-limit middleware; GenerateTitleXml, подписание и отправка наружу намеренно отключены.',
+      message: 'Gateway умеет локально собирать preview UserDataXml. Operator API защищён auth/rate-limit middleware; внешний GenerateTitle требует server-loaded owned document и пока не опубликован.',
       requestId,
     })
     return
