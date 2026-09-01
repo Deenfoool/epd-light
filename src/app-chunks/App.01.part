@@ -6,7 +6,8 @@ import {
   Truck, UserRound, Users, X, Trash2
 } from 'lucide-react'
 import type { Company, DocumentRow, Driver, EtrnData, Party, Profile, Vehicle } from './types'
-import { cargoTotals, emptyCargo, exportJson, isReady, newDoc, statusLabel, validateEtrn, validInn } from './etrn'
+import { cargoTotals, emptyCargo, exportJson, isReady, newDoc, normalizeEtrn, operatorReadiness, statusLabel, validateEtrn, validInn } from './etrn'
+import { buildOperatorDraft } from './operator-draft'
 import {
   cloudEnabled, deleteCompany, deleteDocument, deleteDriver, deleteVehicle, getProfile, getSessionEmail,
   listCompanies, listDocuments, listDrivers, listVehicles, saveCompany, saveDocument, saveDriver,
