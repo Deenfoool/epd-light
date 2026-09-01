@@ -17,5 +17,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Offline invariants
+        run: npm run preflight
       - run: npm install
       - run: npm run build
