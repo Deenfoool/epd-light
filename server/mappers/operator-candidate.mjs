@@ -30,6 +30,7 @@ export function buildCanonicalOperatorCandidate(row) {
     kind: 'epd-light/operator-candidate-v1',
     draftModelVersion: 4,
     canonicalSource: 'server-documents-row',
+    sourceRevision: text(row.updated_at),
     readiness: { candidate: false, requiresServerValidation: true },
     document: {
       internalId: text(row.id),
@@ -98,6 +99,7 @@ export function buildCanonicalOperatorCandidate(row) {
 
 export const CANONICAL_OPERATOR_CANDIDATE_POLICY = Object.freeze({
   sourceTable: 'documents',
+  revisionColumn: 'updated_at',
   clientIntegrationJsonTrusted: false,
   serverRevalidationRequired: true,
   draftModelVersion: 4,
