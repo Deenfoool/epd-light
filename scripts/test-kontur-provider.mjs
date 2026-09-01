@@ -1,8 +1,12 @@
 import {
   KONTUR_T1_CONTRACT,
+  buildKonturContentUrl,
   buildKonturGenerateT1Url,
   buildKonturGetDocumentTypesUrl,
+  discoverKonturT1Descriptor,
+  findKonturT1Descriptor,
   generateKonturT1Xml,
+  getKonturContent,
   getKonturDocumentTypes,
   konturConfigStatus,
   konturPublicCapabilities,
@@ -29,10 +33,43 @@ const typesUrl = new URL(buildKonturGetDocumentTypesUrl({ boxId: '22222222-2222-
 assert(typesUrl.pathname === '/V3/GetDocumentTypes', 'wrong GetDocumentTypes path')
 assert(typesUrl.searchParams.get('boxId'), 'boxId missing in GetDocumentTypes')
 
+const contentUrl = new URL(buildKonturContentUrl({ contentPath: '/GetContent?typeNamedId=LogisticsWaybill&function=reception&version=kl_trn_mt_05_01&titleIndex=0&contentType=UserContractXsd' }))
+assert(contentUrl.pathname === '/GetContent', 'GetContent URL must resolve against Diadoc host')
+assert(contentUrl.searchParams.get('contentType') === 'UserContractXsd', 'GetContent contentType lost')
+
+const descriptorFixture = {
+  DocumentTypes: [{
+    Name: 'LogisticsWaybill',
+    Functions: [{
+      Name: 'reception',
+      Versions: [{
+        Version: 'kl_trn_mt_05_01',
+        Titles: [{
+          Index: 0,
+          IsFormal: true,
+          XsdUrl: '/GetContent?typeNamedId=LogisticsWaybill&function=reception&version=kl_trn_mt_05_01&titleIndex=0&contentType=TitleXsd',
+          UserDataXsdUrl: '/GetContent?typeNamedId=LogisticsWaybill&function=reception&version=kl_trn_mt_05_01&titleIndex=0&contentType=UserContractXsd',
+          SignerInfo: { SignerUserDataXsdUrl: '/GetContent?typeNamedId=LogisticsWaybill&function=reception&version=kl_trn_mt_05_01&titleIndex=0&contentType=SignerUserContractXsd' },
+        }],
+      }],
+    }],
+  }],
+}
+const descriptor = findKonturT1Descriptor(descriptorFixture)
+assert(descriptor?.documentTypeNamedId === 'LogisticsWaybill', 'T1 descriptor type not found')
+assert(descriptor?.documentFunction === 'reception', 'T1 descriptor function not found')
+assert(descriptor?.documentVersion === 'kl_trn_mt_05_01', 'T1 descriptor version not found')
+assert(descriptor?.titleIndex === 0, 'T1 descriptor title not found')
+assert(descriptor?.xsdUrl.includes('TitleXsd'), 'XsdUrl missing from descriptor')
+assert(descriptor?.userDataXsdUrl.includes('UserContractXsd'), 'UserDataXsdUrl missing from descriptor')
+assert(findKonturT1Descriptor({ DocumentTypes: [] }) === null, 'unknown contract must not be guessed')
+
 const emptyStatus = konturConfigStatus({ boxId: '', accessToken: '' })
 assert(emptyStatus.configured === false && emptyStatus.missing.length === 2, 'empty config must be rejected')
 const caps = konturPublicCapabilities({ boxId: 'box', accessToken: 'secret' })
 assert(caps.credentialsConfigured === true, 'configured capability must be detected')
+assert(caps.schemaDiscoveryReady === true, 'schema discovery should be ready server-side')
+assert(caps.schemaDiscoveryWiredToGateway === false, 'schema discovery must not be public gateway route')
 assert(caps.userDataPreviewWiredToGateway === true, 'local UserData preview should be gateway-wired')
 assert(caps.userDataPreviewExternalCall === false, 'UserData preview must remain local-only')
 assert(caps.generateTitleBoundaryReady === true, 'server-only GenerateTitle boundary should be ready')
@@ -71,6 +108,33 @@ const types = await getKonturDocumentTypes({
 assert(Array.isArray(types.DocumentTypes), 'GetDocumentTypes JSON not returned')
 assert(typesRequest.init.headers.authorization === 'Bearer token-2', 'GetDocumentTypes Bearer token missing')
 
+let discoveryCalls = 0
+const discovered = await discoverKonturT1Descriptor({
+  boxId: 'box-3',
+  accessToken: 'token-3',
+  baseUrl: 'https://example.test',
+  fetchImpl: async () => {
+    discoveryCalls += 1
+    return new Response(JSON.stringify(descriptorFixture), { status: 200, headers: { 'content-type': 'application/json' } })
+  },
+})
+assert(discoveryCalls === 1, 'schema discovery should call GetDocumentTypes once')
+assert(discovered.userDataXsdUrl.includes('UserContractXsd'), 'discovery did not return UserDataXsdUrl')
+
+let contentRequest
+const content = await getKonturContent({
+  contentPath: discovered.userDataXsdUrl,
+  accessToken: 'token-4',
+  baseUrl: 'https://example.test',
+  fetchImpl: async (url, init) => {
+    contentRequest = { url: String(url), init }
+    return new Response('<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>', { status: 200, headers: { 'content-type': 'application/xml' } })
+  },
+})
+assert(content.includes('<xs:schema'), 'GetContent XML not returned')
+assert(new URL(contentRequest.url).pathname === '/GetContent', 'GetContent wrong path')
+assert(contentRequest.init.headers.authorization === 'Bearer token-4', 'GetContent Bearer token missing')
+
 let missingTokenFailed = false
 try {
   await generateKonturT1Xml({ boxId: 'box', accessToken: '', userDataXml: '<x/>', fetchImpl: async () => new Response('', { status: 200 }) })
@@ -79,4 +143,4 @@ try {
 }
 assert(missingTokenFailed, 'missing access token must fail before network request')
 
-console.log('Kontur provider offline test OK: contract, URLs, Bearer auth, local preview, private GenerateTitle boundary and fail-closed sending verified')
+console.log('Kontur provider offline test OK: contract, GetDocumentTypes/GetContent schema discovery, Bearer auth, private GenerateTitle boundary and fail-closed sending verified')
