@@ -15,6 +15,7 @@
     "auth:test": "node scripts/test-auth.mjs",
     "authorization:test": "node scripts/test-authorization.mjs",
     "repository:test": "node scripts/test-supabase-repository.mjs",
+    "idempotency:test": "node scripts/test-idempotency.mjs",
     "rate-limit:test": "node scripts/test-rate-limit.mjs",
     "gateway:test": "node scripts/test-gateway.mjs",
     "gateway:auth:test": "node scripts/test-gateway-auth.mjs",
