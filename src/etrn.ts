@@ -83,6 +83,7 @@ export const statusLabel: Record<DocStatus,string> = {
   draft: 'Черновик', incomplete: 'Требует заполнения', ready: 'Черновик готов', archived: 'Архив'
 }
 export const validInn = (v:string) => /^\d{10}$|^\d{12}$/.test(v.trim())
+export const validGuid = (v:string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.trim())
 export type IssueKind = 'required' | 'operator' | 'recommended'
 export type Issue = { field:string; message:string; step:number; kind:IssueKind }
 
@@ -99,10 +100,10 @@ export function validateEtrn(raw:EtrnData): Issue[] {
     if(!p.inn.trim()) add(label,'не указан ИНН',1)
     else if(!validInn(p.inn)) add(label,'ИНН должен содержать 10 или 12 цифр',1)
     if(p.kind==='org'&&!p.kpp.trim()) add(label,'рекомендуется указать КПП организации',1,'recommended')
-    if(!p.address.trim()) add(label,'не указан читаемый адрес',1,'operator')
-    if(!addressCandidateReady(p.russianAddress)) add(label,'для UserDataXml заполните структурированный российский адрес: регион и город/населённый пункт',1,'operator')
+    if(!p.address.trim()) add(label,'не указан читаемый адрес',1,'recommended')
+    if(!addressCandidateReady(p.russianAddress)) add(label,'структурированный адрес участника можно заполнить для альтернативного operator mapping',1,'recommended')
     if(!p.phone.trim()&&!p.email.trim()) add(label,'нет телефона или email',1,'operator')
-    if(!p.edoId?.trim()) add(label,'ID участника ЭДО/FNS participant id будет нужен для прямого UserDataXml mapping',1,'operator')
+    if(!p.edoId?.trim()) add(label,'для первого адаптера нужен BoxId / ID участника ЭДО',1,'operator')
   }
   if(!d.route.loadAddress.trim()) add('Маршрут','не указан адрес погрузки',2)
   if(!d.route.unloadAddress.trim()) add('Маршрут','не указан адрес выгрузки',2)
