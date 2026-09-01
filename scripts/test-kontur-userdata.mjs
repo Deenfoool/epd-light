@@ -6,7 +6,7 @@ const party = (boxId, name, inn, kpp, phone) => ({ kind: 'org', name, inn, kpp, 
 
 const candidate = {
   kind: 'epd-light/operator-candidate-v1',
-  draftModelVersion: 3,
+  draftModelVersion: 4,
   readiness: { candidate: true, operatorFieldsMissing: 0, warnings: 0 },
   document: { number: 'ЭТрН-2026-001', date: '2026-09-01', orderNumber: 'ЗАЯВКА-1', orderDate: '2026-08-31', contractNumber: '', contractDate: '' },
   participants: {
@@ -20,6 +20,7 @@ const candidate = {
     unloadingAddress: 'Тверь, Примерная, 2', unloadingRussianAddress: address('69', 'Тверь'), plannedUnloadingDate: '2026-09-01', plannedUnloadingTime: '15:00', note: '',
   },
   loadingFacts: { actualGrossWeight: '840', actualPlaces: '12', massDeterminationMethod: '01' },
+  loadingDetails: { matchingShipper: '1', employeeFullName: 'Сидорова Екатерина Сергеевна', employeePosition: 'Сотрудник', employeeResponsibilities: 'Передача груза водителю', partyInn: '', ownerType: '1', ownerInn: '7700000000' },
   cargo: [{ internalId: '1', name: 'Товар & тест', state: 'Целый', places: '12', unit: 'мест', grossWeightKg: '840', declaredValue: '', currencyCode: '643', packaging: 'короб', packagingMethod: 'Коробки', packagingCode: '00', marking: 'Отсутствует', specialConditions: '' }],
   vehicle: { registrationNumber: 'А001АА777', trailerRegistrationNumber: '', type: 'грузовой автомобиль', brand: 'КАМАЗ', model: '5490', ownershipType: '1', loadCapacity: '20', volumeCapacity: '82' },
   driver: { fullName: 'Иванов Иван Иванович', phone: '+79000000003', licenseLegacy: '', licenseSeries: '9999', licenseNumber: '123456', licenseIssueDate: '2024-01-20', waybillNumber: '', waybillDate: '' },
@@ -43,6 +44,12 @@ for (const snippet of [
   '<Vehicle Number="А001АА777" Ownership="1"',
   'StatedArrivalDateTime="01.09.2026T09:00:00"',
   'StatedArrivalDateTimeEnablingTimeZone="0"',
+  '<LoadingPartyDetails MatchingShipper="1">',
+  '<LoadingPartyEmployee Position="Сотрудник">',
+  '<JobResponsibilities>Передача груза водителю</JobResponsibilities>',
+  '<Fio LastName="Сидорова" FirstName="Екатерина" MiddleName="Сергеевна" />',
+  '<RequisitesShipper Inn="7700000000" />',
+  '<LoadingOwnerDetails Type="1"><RequisitesShipper Inn="7700000000" /></LoadingOwnerDetails>',
   '<Signer SignerType="1"><SignerDetails Position="Кладовщик" LastName="Петров" FirstName="Петр" MiddleName="Петрович"',
 ]) assert(xml.includes(snippet), `XML missing: ${snippet}`)
 assert(!xml.includes('Товар & тест'), 'XML attribute escaping failed')
@@ -59,4 +66,14 @@ const badBox = structuredClone(candidate)
 badBox.participants.shipper.edoId = '7700000000'
 assert(validateKonturT1Candidate(badBox).ok === false, 'INN must not be accepted as Diadoc BoxId')
 
-console.log('Kontur UserDataXml preview test OK: validation, escaping, T1 structure and fail-closed cases verified')
+const partialLoadingParty = structuredClone(candidate)
+partialLoadingParty.loadingDetails.employeePosition = ''
+assert(validateKonturT1Candidate(partialLoadingParty).ok === false, 'partially filled LoadingPartyDetails must fail closed')
+
+const omittedLoading = structuredClone(candidate)
+omittedLoading.loadingDetails = { matchingShipper: '', employeeFullName: '', employeePosition: '', employeeResponsibilities: '', partyInn: '', ownerType: '', ownerInn: '' }
+const omittedValidation = validateKonturT1Candidate(omittedLoading)
+assert(omittedValidation.ok === true, 'omitted loading blocks should remain preview-compatible until UserDataXsd confirms mandatory status')
+assert(omittedValidation.warnings.some((x) => x.includes('LoadingPartyDetails')), 'omitted loading party must produce warning')
+
+console.log('Kontur UserDataXml preview test OK: validation, escaping, loading blocks, T1 structure and fail-closed cases verified')
