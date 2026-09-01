@@ -34,6 +34,7 @@ dc() {
 
 echo "== EPD Light server-day prechecks =="
 run_node scripts/check-deployment-env.mjs
+run_node scripts/preflight-deploy.mjs
 run_node scripts/preflight.mjs
 run_node scripts/test-deployment-env.mjs
 run_node scripts/test-audit.mjs
