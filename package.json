@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "preflight": "node scripts/preflight.mjs",
+    "fns:schema:check": "node scripts/check-fns-schema.mjs",
+    "fns:schema:save": "node scripts/check-fns-schema.mjs --save",
     "predev": "node scripts/assemble-app.mjs",
     "dev": "vite",
     "prebuild": "node scripts/assemble-app.mjs",
