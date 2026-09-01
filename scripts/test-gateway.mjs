@@ -8,7 +8,9 @@ const child = spawn(process.execPath, ['server/index.mjs'], {
   stdio: ['ignore', 'pipe', 'pipe'],
 })
 
+let stdout = ''
 let stderr = ''
+child.stdout.on('data', (chunk) => { stdout += String(chunk) })
 child.stderr.on('data', (chunk) => { stderr += String(chunk) })
 
 async function waitForHealth() {
@@ -48,10 +50,10 @@ try {
       loadingRussianAddress: a('77','Москва'), unloadingRussianAddress: a('69','Тверь'),
       plannedLoadingDate: '2026-09-01', plannedLoadingTime: '09:00', actualArrival: '2026-09-01T08:55', actualDeparture: '2026-09-01T09:20',
     },
-    cargo: [{ name: 'Тестовый груз', state: 'Целый', packagingMethod: 'Коробки', packagingCode: '00', places: '1', grossWeightKg: '10', marking: 'Отсутствует' }],
+    cargo: [{ name: 'Тестовый груз СЕКРЕТ-ГРУЗ', state: 'Целый', packagingMethod: 'Коробки', packagingCode: '00', places: '1', grossWeightKg: '10', marking: 'Отсутствует' }],
     loadingFacts: { actualGrossWeight: '10', actualPlaces: '1', massDeterminationMethod: '01' },
     vehicle: { registrationNumber: 'А001АА777', type: 'грузовой автомобиль', ownershipType: '1', brand: 'Тест', model: '1', loadCapacity: '20', volumeCapacity: '80' },
-    driver: { fullName: 'Иванов Иван Иванович', phone: '+79000000003', licenseSeries: '9999', licenseNumber: '123456', licenseLegacy: '', licenseIssueDate: '2024-01-20' },
+    driver: { fullName: 'Иванов Секретный Иванович', phone: '+79991234567', licenseSeries: '9999', licenseNumber: '123456', licenseLegacy: '', licenseIssueDate: '2024-01-20' },
     shipperInstructions: { instructions: 'Особых указаний нет', redirectionContact: '+79000000001' },
     signer: { fullName: 'Петров Петр Петрович', position: 'Кладовщик' },
     readiness: { candidate: true },
@@ -80,7 +82,15 @@ try {
   assert(sendResponse.status === 503, 'send endpoint must stay disabled')
   assert(send.error === 'operator_send_disabled', 'send endpoint must return operator_send_disabled')
 
-  console.log('Gateway smoke test OK: health, capabilities, preflight, local Kontur UserData preview and fail-closed send verified')
+  await sleep(50)
+  assert(stdout.includes('"event":"gateway_request"'), 'gateway should write JSON audit events')
+  for (const forbidden of ['Иванов Секретный Иванович', '+79991234567', 'СЕКРЕТ-ГРУЗ', '<LogisticsWaybillConsignorTitle']) {
+    assert(!stdout.includes(forbidden), `gateway stdout leaked request/response payload data: ${forbidden}`)
+  }
+  assert(stdout.includes('"path":"/api/operator/preflight"'), 'preflight route should be audited')
+  assert(stdout.includes('"errorCode":"operator_send_disabled"'), 'disabled send should expose only machine-safe audit code')
+
+  console.log('Gateway smoke test OK: health, local Kontur preview, fail-closed send and payload-free audit verified')
 } finally {
   child.kill('SIGTERM')
   await Promise.race([new Promise((resolve) => child.once('exit', resolve)), sleep(1000)])
