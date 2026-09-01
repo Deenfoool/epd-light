@@ -8,14 +8,18 @@ const hashKey = (value) => createHash('sha256').update(String(value || 'anonymou
 export function rateLimitConfigFromEnv(env = process.env) {
   const windowMs = Math.max(1_000, Number(env.EPD_RATE_LIMIT_WINDOW_MS || 60_000))
   const max = Math.max(1, Number(env.EPD_RATE_LIMIT_MAX || 60))
-  const authMax = Math.max(1, Number(env.EPD_AUTH_ATTEMPT_LIMIT_MAX || 30))
+  const authMax = Math.max(1, Number(env.EPD_AUTH_ATTEMPT_LIMIT_MAX || 120))
   return { windowMs, max, authMax }
 }
 
 export function requestNetworkKey(req) {
-  const forwarded = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0]?.trim()
+  // In the supported deployment nginx overwrites X-Real-IP with $remote_addr.
+  // Prefer it over client-controlled X-Forwarded-For to prevent rate-limit key spoofing.
+  const realIp = String(req?.headers?.['x-real-ip'] || '').trim()
+  const forwardedParts = String(req?.headers?.['x-forwarded-for'] || '').split(',').map((x) => x.trim()).filter(Boolean)
+  const forwardedLast = forwardedParts.at(-1) || ''
   const remote = String(req?.socket?.remoteAddress || '').trim()
-  return hashKey(forwarded || remote || 'unknown')
+  return hashKey(realIp || forwardedLast || remote || 'unknown')
 }
 
 export function authenticatedRateKey(auth, req) {
