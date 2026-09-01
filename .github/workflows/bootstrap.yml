@@ -1,0 +1,44 @@
+name: Bootstrap EPD Light MVP
+
+on:
+  push:
+    paths:
+      - '.github/workflows/bootstrap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore project archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/chunk* | tr -d '\n' | base64 -d > /tmp/epd-light.tar.gz
+          echo 'fdb65c655f70d18b7dd16ee32c0ebdfcd731652ba456c04f29015c05ccf28a28  /tmp/epd-light.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/epd-light.tar.gz -C .
+          rm -rf .bootstrap
+          rm -f .github/workflows/bootstrap.yml
+
+      - name: Commit MVP source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git commit -m 'feat: build epd-light MVP'
+          git push origin HEAD:main
