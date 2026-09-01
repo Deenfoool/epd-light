@@ -31,12 +31,14 @@ titleIndex          = 0
 
 Реализовано:
 
-1. `src/operator-draft.ts` — браузер формирует operator-neutral Integration JSON.
+1. `src/operator-draft.ts` — браузер формирует operator-neutral Integration JSON (`draftModelVersion = 4`).
 2. `POST /api/operator/preflight` — структурная server-side проверка без внешних вызовов.
 3. `server/providers/kontur-userdata.mjs` — локальная проверка полей и построение T1 `UserDataXml` preview.
-4. `POST /api/operator/kontur/userdata-preview` — возвращает XML preview; **Контур при этом не вызывается**.
-5. `server/providers/kontur.mjs` — серверные функции для `GetDocumentTypes (V3)` и `GenerateTitleXml`, но они намеренно не подключены к публичным gateway endpoints.
-6. `POST /api/operator/send` — всегда отвечает `503 operator_send_disabled`.
+4. В preview поддержаны `LoadingPartyDetails` и `LoadingOwnerDetails`, если пользователь заполнил их явно; частично заполненный блок блокирует генерацию preview.
+5. `POST /api/operator/kontur/userdata-preview` — возвращает XML preview; **Контур при этом не вызывается**.
+6. `server/providers/kontur.mjs` — серверные функции для `GetDocumentTypes (V3)` и `GenerateTitleXml`.
+7. `server/services/kontur-title.mjs` — server-only boundary `operator candidate -> UserDataXml -> GenerateTitleXml`. Он не опубликован как gateway endpoint и предназначен для будущего sandbox.
+8. `POST /api/operator/send` — всегда отвечает `503 operator_send_disabled`.
 
 На карточке документа кнопка `Kontur XML preview` скачивает локально сформированный `*-kontur-userdata-preview.xml`. Этот XML нужен для разработки и отладки маппинга. Он **не является** результатом `GenerateTitleXml`, не подписан, не отправлен оператору и не подтверждает соответствие итоговой XSD ФНС.
 
@@ -47,9 +49,11 @@ titleIndex          = 0
 - участники пока поддерживаются только как организации через `OrganizationReference BoxId`;
 - ИП блокируется до проверки соответствующей ветки актуального `UserDataXsd`;
 - адреса погрузки и доставки формируются только из структурированных полей `RussianAddressDraft`; обычная строка адреса автоматически не разбирается;
+- `LoadingPartyDetails` и `LoadingOwnerDetails` формируются только при явно введённых значениях; отсутствие блоков пока даёт предупреждение, потому что их обязательность нужно подтвердить актуальным `UserDataXsd`;
+- если `MatchingShipper=1`, ИНН лица погрузки может быть взят из грузоотправителя только потому, что пользователь явно указал совпадение;
 - `datetime-local` не содержит часовой пояс, поэтому preview формирует время без timezone и выставляет `EnablingTimeZone=0`; это должно быть проверено в sandbox оператора до боевого использования;
-- коды `Ownership`, `WeighingMethod`, `ContainerType` пока вводятся как значения контракта и должны быть окончательно сверены с актуальным `UserDataXsd/GetDocumentTypes`;
-- `GenerateTitleXml` не вызывается из gateway;
+- коды `Ownership`, `WeighingMethod`, `ContainerType` и `LoadingOwnerDetails.Type` вводятся как значения контракта и должны быть окончательно сверены с актуальным `UserDataXsd/GetDocumentTypes`;
+- `GenerateTitleXml` существует только как приватная server-side boundary и не вызывается из gateway;
 - `PostMessage (V3)`, подписание и обработка юридически значимых статусов не реализованы.
 
 ## Статусы
@@ -71,11 +75,12 @@ titleIndex          = 0
 2. Через `GetDocumentTypes (V3)` получить актуальные `XsdUrl`/`UserDataXsdUrl` для `LogisticsWaybill / reception / kl_trn_mt_05_01 / titleIndex=0`.
 3. Добавить автоматическую проверку версии/хэша UserDataXsd и контрактных перечислений.
 4. Довести UserDataXml mapping для организаций и ИП.
-5. Прогнать XML preview через реальный `GenerateTitleXml` только в sandbox.
+5. Прогнать `server/services/kontur-title.mjs` через реальный `GenerateTitleXml` только в sandbox с отдельными тестовыми реквизитами.
 6. Валидировать сгенерированный T1 по актуальной схеме и сопоставить результат `ParseTitleXml` обратно с нашим черновиком.
-7. Добавить idempotency, журнал запросов и безопасное хранение внешних `messageId/entityId/mt-id/kl-id`.
-8. Спроектировать signing flow и только после него `PostMessage (V3)`.
-9. Провести тестовый обмен и только после него открыть реальную отправку пользователям.
+7. До публикации внешнего GenerateTitle route добавить полноценную аутентификацию/авторизацию организации, rate limiting и аудит без логирования полного ЭТрН.
+8. Добавить idempotency, журнал запросов и безопасное хранение внешних `messageId/entityId/mt-id/kl-id`.
+9. Спроектировать signing flow и только после него `PostMessage (V3)`.
+10. Провести тестовый обмен и только после него открыть реальную отправку пользователям.
 
 ## Источники
 
