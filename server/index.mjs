@@ -1,0 +1,154 @@
+import { createServer } from 'node:http'
+import { randomUUID } from 'node:crypto'
+
+const port = Number(process.env.PORT || 8787)
+const provider = process.env.EPD_OPERATOR_PROVIDER || 'none'
+const operatorMode = process.env.EPD_OPERATOR_MODE || 'disabled'
+const maxBodyBytes = Number(process.env.EPD_MAX_BODY_BYTES || 512 * 1024)
+const allowedOrigins = new Set(
+  String(process.env.EPD_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean),
+)
+
+function responseHeaders(requestId, origin) {
+  const headers = {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    'referrer-policy': 'no-referrer',
+    'x-request-id': requestId,
+  }
+  if (origin && allowedOrigins.has(origin)) {
+    headers['access-control-allow-origin'] = origin
+    headers['vary'] = 'Origin'
+  }
+  return headers
+}
+
+function sendJson(res, status, payload, requestId, origin) {
+  res.writeHead(status, responseHeaders(requestId, origin))
+  res.end(JSON.stringify(payload))
+}
+
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks = []
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > maxBodyBytes) {
+        reject(Object.assign(new Error('request body too large'), { statusCode: 413 }))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      try {
+        const raw = Buffer.concat(chunks).toString('utf8')
+        resolve(raw ? JSON.parse(raw) : {})
+      } catch {
+        reject(Object.assign(new Error('invalid JSON'), { statusCode: 400 }))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+function preflightCandidate(input) {
+  const errors = []
+  const warnings = []
+  if (!input || typeof input !== 'object') errors.push('payload должен быть JSON-объектом')
+  if (input?.kind !== 'epd-light/operator-candidate-v1') errors.push('неподдерживаемый kind интеграционного черновика')
+  if (!input?.document?.number) errors.push('не указан номер внутреннего черновика')
+  if (!input?.document?.date) errors.push('не указана дата внутреннего черновика')
+  for (const role of ['shipper', 'consignee', 'carrier']) {
+    const p = input?.participants?.[role]
+    if (!p?.name) errors.push(`${role}: не указано наименование`)
+    if (!p?.inn) errors.push(`${role}: не указан ИНН`)
+  }
+  if (!Array.isArray(input?.cargo) || input.cargo.length === 0) errors.push('не указан груз')
+  if (!input?.vehicle?.registrationNumber) errors.push('не указан госномер ТС')
+  if (!input?.driver?.fullName) errors.push('не указан водитель')
+  if (!input?.readiness?.candidate) warnings.push('frontend operator-readiness содержит незаполненные поля')
+  warnings.push('server preflight не является XSD-валидацией ФНС')
+  warnings.push('provider adapter не подключён и внешние API не вызываются')
+  return { ok: errors.length === 0, errors, warnings }
+}
+
+const server = createServer(async (req, res) => {
+  const requestId = randomUUID()
+  const origin = req.headers.origin || ''
+  const url = new URL(req.url || '/', 'http://gateway.local')
+
+  if (req.method === 'OPTIONS') {
+    if (origin && allowedOrigins.has(origin)) {
+      res.writeHead(204, {
+        ...responseHeaders(requestId, origin),
+        'access-control-allow-methods': 'GET,POST,OPTIONS',
+        'access-control-allow-headers': 'content-type,authorization',
+        'access-control-max-age': '600',
+      })
+      res.end()
+    } else {
+      sendJson(res, 403, { error: 'origin_not_allowed', requestId }, requestId, origin)
+    }
+    return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/healthz') {
+    sendJson(res, 200, { ok: true, service: 'epd-light-operator-gateway', requestId }, requestId, origin)
+    return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/operator/capabilities') {
+    sendJson(res, 200, {
+      service: 'epd-light-operator-gateway',
+      provider,
+      mode: operatorMode,
+      externalSendEnabled: false,
+      xsdValidationEnabled: false,
+      authRequiredForFutureSend: true,
+      supportedCandidate: 'epd-light/operator-candidate-v1',
+      message: 'Gateway работает, но внешняя отправка намеренно отключена до реализации и проверки provider adapter.',
+      requestId,
+    }, requestId, origin)
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/operator/preflight') {
+    try {
+      const body = await readJson(req)
+      const result = preflightCandidate(body)
+      sendJson(res, result.ok ? 200 : 422, { ...result, requestId }, requestId, origin)
+    } catch (error) {
+      const status = Number(error?.statusCode || 500)
+      sendJson(res, status, { error: error instanceof Error ? error.message : 'request failed', requestId }, requestId, origin)
+    }
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/operator/send') {
+    sendJson(res, 503, {
+      error: 'operator_send_disabled',
+      provider,
+      mode: operatorMode,
+      message: 'Юридически значимая отправка заблокирована: provider adapter и операторский доступ ещё не подключены.',
+      requestId,
+    }, requestId, origin)
+    return
+  }
+
+  sendJson(res, 404, { error: 'not_found', requestId }, requestId, origin)
+})
+
+server.requestTimeout = 15_000
+server.headersTimeout = 10_000
+server.keepAliveTimeout = 5_000
+
+server.listen(port, '0.0.0.0', () => {
+  console.log(`EPD Light operator gateway listening on :${port}; provider=${provider}; mode=${operatorMode}; externalSendEnabled=false`)
+})
