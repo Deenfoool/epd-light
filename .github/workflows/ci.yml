@@ -22,7 +22,10 @@ jobs:
           node --check server/index.mjs
           node --check scripts/preflight.mjs
           node --check scripts/check-fns-schema.mjs
+          node --check scripts/test-gateway.mjs
       - name: Offline invariants
         run: npm run preflight
+      - name: Gateway smoke test
+        run: npm run gateway:test
       - run: npm install
       - run: npm run build
