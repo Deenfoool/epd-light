@@ -42,3 +42,5 @@ jobs:
           fi
           git commit -m 'feat: build epd-light MVP'
           git push origin HEAD:main
+
+# bootstrap trigger
