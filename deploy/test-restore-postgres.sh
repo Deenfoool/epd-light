@@ -48,7 +48,7 @@ case "$DB_NAME" in
     ;;
 esac
 
-EPD_BACKUP_PASSPHRASE="$PASSPHRASE" "$ROOT_DIR/deploy/verify-postgres-backup.sh" "$BACKUP_FILE" >/dev/null
+EPD_BACKUP_PASSPHRASE="$PASSPHRASE" sh "$ROOT_DIR/deploy/verify-postgres-backup.sh" "$BACKUP_FILE" >/dev/null
 
 BACKUP_DIR="$(CDPATH= cd -- "$(dirname -- "$BACKUP_FILE")" && pwd)"
 TMP_FILE="$BACKUP_DIR/.restore-test-$$.dump"
