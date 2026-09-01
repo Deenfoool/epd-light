@@ -1,4 +1,4 @@
-import { generateKonturT1FromCandidate, KONTUR_GENERATION_BOUNDARY } from '../server/services/kontur-title.mjs'
+import { generateAuthorizedKonturT1, generateKonturT1FromCandidate, KONTUR_GENERATION_BOUNDARY } from '../server/services/kontur-title.mjs'
 
 const assert = (condition, message) => { if (!condition) throw new Error(message) }
 const address = (region, city) => ({ zipCode: '620050', region, city, settlement: '', street: 'Ленина', building: '1', corpus: '', apartment: '' })
@@ -7,7 +7,7 @@ const party = (boxId, inn, phone) => ({ kind: 'org', name: 'ООО Тест', in
 const candidate = {
   kind: 'epd-light/operator-candidate-v1',
   draftModelVersion: 4,
-  document: { number: 'TEST-1', date: '2026-09-01', orderNumber: 'ORDER-1', orderDate: '2026-09-01' },
+  document: { internalId: 'doc-1', number: 'TEST-1', date: '2026-09-01', orderNumber: 'ORDER-1', orderDate: '2026-09-01' },
   participants: {
     shipper: party('11111111-1111-1111-1111-111111111111', '7700000000', '+79000000001'),
     consignee: party('22222222-2222-2222-2222-222222222222', '7800000000', '+79000000002'),
@@ -26,16 +26,13 @@ const candidate = {
   signer: { fullName: 'Петров Петр Петрович', position: 'Кладовщик' },
 }
 
+const config = { boxId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', accessToken: 'server-secret' }
 let request
-const result = await generateKonturT1FromCandidate({
-  candidate,
-  config: { boxId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', accessToken: 'server-secret' },
-  baseUrl: 'https://example.test',
-  fetchImpl: async (url, init) => {
-    request = { url: String(url), init }
-    return new Response('<Файл ВерсФорм="5.01"/>', { status: 200, headers: { 'content-type': 'application/xml' } })
-  },
-})
+const fetchImpl = async (url, init) => {
+  request = { url: String(url), init }
+  return new Response('<Файл ВерсФорм="5.01"/>', { status: 200, headers: { 'content-type': 'application/xml' } })
+}
+const result = await generateKonturT1FromCandidate({ candidate, config, baseUrl: 'https://example.test', fetchImpl })
 
 const url = new URL(request.url)
 assert(url.pathname === '/GenerateTitleXml', 'boundary must call GenerateTitleXml only')
@@ -49,6 +46,8 @@ assert(request.init.body.includes('<LoadingPartyDetails MatchingShipper="1">'), 
 assert(result.generatedXml.includes('ВерсФорм="5.01"'), 'generated title XML not returned')
 assert(result.signed === false && result.sent === false, 'boundary must never claim signing or sending')
 assert(KONTUR_GENERATION_BOUNDARY.gatewayRouteExposed === false, 'external generation route must stay private')
+assert(KONTUR_GENERATION_BOUNDARY.clientPayloadAuthoritative === false, 'client payload must not be authoritative')
+assert(KONTUR_GENERATION_BOUNDARY.serverLoadedDocumentRequiredForGateway === true, 'canonical backend document must be required')
 assert(KONTUR_GENERATION_BOUNDARY.callsPostMessage === false, 'boundary must not call PostMessage')
 
 let networkCalled = false
@@ -65,4 +64,31 @@ try {
 assert(configFailed, 'missing server credentials must fail closed')
 assert(networkCalled === false, 'missing config must fail before network call')
 
-console.log('Kontur generation boundary test OK: candidate -> UserDataXml -> GenerateTitleXml, no signing/PostMessage, fail-closed config')
+let authorizedRequestCount = 0
+const authorized = await generateAuthorizedKonturT1({
+  auth: { mode: 'supabase', subject: 'user-1', role: 'authenticated' },
+  documentId: 'doc-1',
+  loadOwnedCandidate: async (id) => id === 'doc-1' ? { ownerSubject: 'user-1', candidate } : null,
+  config,
+  baseUrl: 'https://example.test',
+  fetchImpl: async () => { authorizedRequestCount += 1; return new Response('<Файл Authorized="1"/>', { status: 200 }) },
+})
+assert(authorizedRequestCount === 1 && authorized.generatedXml.includes('Authorized="1"'), 'owned canonical document should reach GenerateTitleXml')
+
+let unauthorizedNetworkCalled = false
+let ownershipFailed = false
+try {
+  await generateAuthorizedKonturT1({
+    auth: { mode: 'supabase', subject: 'user-1', role: 'authenticated' },
+    documentId: 'doc-1',
+    loadOwnedCandidate: async () => ({ ownerSubject: 'user-2', candidate }),
+    config,
+    fetchImpl: async () => { unauthorizedNetworkCalled = true; return new Response('', { status: 200 }) },
+  })
+} catch (error) {
+  ownershipFailed = error?.code === 'document_not_available'
+}
+assert(ownershipFailed, 'cross-account canonical document must fail authorization')
+assert(unauthorizedNetworkCalled === false, 'ownership failure must happen before any Kontur network call')
+
+console.log('Kontur generation boundary test OK: canonical ownership -> UserDataXml -> GenerateTitleXml, no signing/PostMessage, fail-closed auth/config')
