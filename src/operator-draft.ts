@@ -50,6 +50,16 @@ export function buildOperatorDraft(doc: DocumentRow) {
       ...FNS_ETRN_REFERENCE,
       mappingScope: 'Т1 / информация грузоотправителя, предварительное сопоставление полей',
     },
+    providerHints: {
+      kontur: {
+        observedAt: '2026-09-01',
+        documentTypeNamedId: 'LogisticsWaybill',
+        documentFunction: 'reception',
+        documentVersion: 'kl_trn_mt_05_01',
+        generationTitleIndex: 0,
+        previewOnly: true,
+      },
+    },
     readiness: {
       candidate: readiness.candidate,
       operatorFieldsMissing: readiness.missing,
@@ -135,7 +145,9 @@ export function buildOperatorDraft(doc: DocumentRow) {
       extra: d.terms.extra,
     },
     unresolvedByDesign: [
-      'точные коды OrgType/Ownership/WeighingMethod и условная обязательность берутся из актуального UserDataXsd/GetDocumentTypes',
+      'полные перечисления OrgType/Ownership/WeighingMethod/ContainerType и условная обязательность берутся из актуального UserDataXsd/GetDocumentTypes',
+      'LoadingPartyDetails и LoadingOwnerDetails присутствуют в публичном примере T1, но не генерируются до проверки обязательности и бизнес-смысла по актуальному UserDataXsd',
+      'datetime-local не содержит часовой пояс; текущий preview использует EnablingTimeZone=0 и не должен идти в GenerateTitleXml до sandbox-проверки',
       'ИП и иные типы участников должны быть проверены по актуальному UserDataXsd до генерации',
       'формирование имени итогового XML и транспортного контейнера',
       'подписание КЭП/УНЭП и юридически значимые статусы',
