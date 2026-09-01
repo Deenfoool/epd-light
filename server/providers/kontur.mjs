@@ -51,6 +51,11 @@ export function buildKonturGenerateT1Url({ boxId, baseUrl = API_BASE }) {
   return url.toString()
 }
 
+export function buildKonturContentUrl({ contentPath, baseUrl = API_BASE }) {
+  const path = requireValue(contentPath, 'contentPath')
+  return new URL(path, baseUrl).toString()
+}
+
 function bearerHeaders(accessToken, contentType) {
   const token = requireValue(accessToken, 'accessToken')
   const headers = {
@@ -74,6 +79,47 @@ export async function getKonturDocumentTypes({ boxId, accessToken, fetchImpl = f
     throw new Error(`Kontur GetDocumentTypes failed with HTTP ${response.status}`)
   }
   return response.json()
+}
+
+/** Finds the currently pinned T1 contract in a GetDocumentTypes (V3) JSON response. */
+export function findKonturT1Descriptor(response) {
+  const documentTypes = Array.isArray(response?.DocumentTypes) ? response.DocumentTypes : []
+  const documentType = documentTypes.find((x) => x?.Name === KONTUR_T1_CONTRACT.documentTypeNamedId)
+  const documentFunction = (Array.isArray(documentType?.Functions) ? documentType.Functions : [])
+    .find((x) => x?.Name === KONTUR_T1_CONTRACT.documentFunction)
+  const version = (Array.isArray(documentFunction?.Versions) ? documentFunction.Versions : [])
+    .find((x) => x?.Version === KONTUR_T1_CONTRACT.documentVersion)
+  const title = (Array.isArray(version?.Titles) ? version.Titles : [])
+    .find((x) => Number(x?.Index) === KONTUR_T1_CONTRACT.titleIndex)
+  if (!documentType || !documentFunction || !version || !title) return null
+  return {
+    documentTypeNamedId: documentType.Name,
+    documentFunction: documentFunction.Name,
+    documentVersion: version.Version,
+    titleIndex: Number(title.Index),
+    isFormal: Boolean(title.IsFormal),
+    xsdUrl: String(title.XsdUrl || ''),
+    userDataXsdUrl: String(title.UserDataXsdUrl || ''),
+    signerUserDataXsdUrl: String(title.SignerInfo?.SignerUserDataXsdUrl || ''),
+  }
+}
+
+export async function discoverKonturT1Descriptor({ boxId, accessToken, fetchImpl = fetch, baseUrl = API_BASE }) {
+  const documentTypes = await getKonturDocumentTypes({ boxId, accessToken, fetchImpl, baseUrl })
+  const descriptor = findKonturT1Descriptor(documentTypes)
+  if (!descriptor) throw new Error('Kontur T1 descriptor not found in GetDocumentTypes (V3) response')
+  if (!descriptor.xsdUrl || !descriptor.userDataXsdUrl) throw new Error('Kontur T1 descriptor does not expose XsdUrl/UserDataXsdUrl')
+  return descriptor
+}
+
+/** Loads an XSD path returned by GetDocumentTypes using the same server-side Bearer token. */
+export async function getKonturContent({ contentPath, accessToken, fetchImpl = fetch, baseUrl = API_BASE }) {
+  const response = await fetchImpl(buildKonturContentUrl({ contentPath, baseUrl }), {
+    method: 'GET',
+    headers: { ...bearerHeaders(accessToken), accept: 'application/xml,text/xml,*/*' },
+  })
+  if (!response.ok) throw new Error(`Kontur GetContent failed with HTTP ${response.status}`)
+  return response.text()
 }
 
 /**
@@ -106,12 +152,14 @@ export function konturPublicCapabilities(config = konturConfigFromEnv()) {
     boxIdConfigured: status.boxIdConfigured,
     accessTokenConfigured: status.accessTokenConfigured,
     contract: KONTUR_T1_CONTRACT,
+    schemaDiscoveryReady: true,
+    schemaDiscoveryWiredToGateway: false,
     userDataPreviewWiredToGateway: true,
     userDataPreviewExternalCall: false,
     generateTitleBoundaryReady: true,
     generateTitleWiredToGateway: false,
     postMessageImplemented: false,
     sendWiredToGateway: false,
-    note: 'Gateway локально формирует UserDataXml preview. Server-only boundary для GenerateTitleXml подготовлен, но не опубликован как gateway route; подписание и PostMessage не реализованы.',
+    note: 'GetDocumentTypes/GetContent и GenerateTitleXml подготовлены как server-only функции. Gateway публикует только локальный UserDataXml preview; подписание и PostMessage не реализованы.',
   }
 }
