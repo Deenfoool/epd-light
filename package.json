@@ -8,6 +8,7 @@
     "gateway:test": "node scripts/test-gateway.mjs",
     "kontur:provider:test": "node scripts/test-kontur-provider.mjs",
     "kontur:userdata:test": "node scripts/test-kontur-userdata.mjs",
+    "kontur:generation:test": "node scripts/test-kontur-generation.mjs",
     "fns:schema:check": "node scripts/check-fns-schema.mjs",
     "fns:schema:save": "node scripts/check-fns-schema.mjs --save",
     "predev": "node scripts/assemble-app.mjs",
