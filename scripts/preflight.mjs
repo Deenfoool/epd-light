@@ -81,11 +81,20 @@ for (const snippet of ['epd-light/operator-candidate-v1', 'draftModelVersion: 4'
 }
 
 const gateway = await readFile(path.join(root, 'server', 'index.mjs'), 'utf8')
-for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'", "url.pathname === '/api/operator/kontur/userdata-preview'", "url.pathname === '/api/operator/send'", 'externalSendEnabled: false', 'externalCallMade: false', "error: 'operator_send_disabled'"]) {
-  if (!gateway.includes(snippet)) fail(`gateway fail-closed invariant missing: ${snippet}`)
+for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'", "url.pathname === '/api/operator/kontur/userdata-preview'", "url.pathname === '/api/operator/send'", 'externalSendEnabled: false', 'externalCallMade: false', "error: 'operator_send_disabled'", 'writeGatewayAudit', 'path: url.pathname']) {
+  if (!gateway.includes(snippet)) fail(`gateway fail-closed/audit invariant missing: ${snippet}`)
 }
 if (gateway.includes('/api/operator/kontur/generate-title')) fail('GenerateTitleXml must not be exposed as an unauthenticated gateway route')
 if (gateway.includes('/api/operator/kontur/schemas')) fail('authenticated schema discovery must not be exposed as an unauthenticated gateway route')
+if (gateway.includes('req.headers.authorization')) fail('gateway audit/routing must not read Authorization into application logging')
+
+const audit = await readFile(path.join(root, 'server', 'audit.mjs'), 'utf8')
+for (const snippet of ["event: 'gateway_request'", 'createGatewayAuditEvent', 'writeGatewayAudit', 'auditErrorCode', 'SAFE_CODE_RE', 'JSON.stringify(event)']) {
+  if (!audit.includes(snippet)) fail(`privacy-safe audit invariant missing: ${snippet}`)
+}
+for (const forbidden of ['input.body', 'input.headers', 'input.authorization', 'input.token', 'JSON.stringify(input)']) {
+  if (audit.includes(forbidden)) fail(`audit module may serialize sensitive input: ${forbidden}`)
+}
 
 const konturProvider = await readFile(path.join(root, 'server', 'providers', 'kontur.mjs'), 'utf8')
 for (const snippet of ["documentTypeNamedId: 'LogisticsWaybill'", "documentFunction: 'reception'", "documentVersion: 'kl_trn_mt_05_01'", 'findKonturT1Descriptor', 'discoverKonturT1Descriptor', 'getKonturContent', 'schemaDiscoveryReady: true', 'schemaDiscoveryWiredToGateway: false', 'userDataPreviewWiredToGateway: true', 'generateTitleBoundaryReady: true', 'generateTitleWiredToGateway: false', 'postMessageImplemented: false', 'sendWiredToGateway: false']) {
@@ -107,6 +116,11 @@ for (const snippet of ['discoverKonturT1Descriptor', 'getKonturContent', 'sha256
   if (!konturSchemaCheck.includes(snippet)) fail(`Kontur schema checker invariant missing: ${snippet}`)
 }
 
+const auditTest = await readFile(path.join(root, 'scripts', 'test-audit.mjs'), 'utf8')
+for (const snippet of ['strict allow-list', 'super-secret-bearer-token', 'auditErrorCode', 'http_error']) {
+  if (!auditTest.includes(snippet)) fail(`audit test invariant missing: ${snippet}`)
+}
+
 const compose = await readFile(path.join(root, 'docker-compose.yml'), 'utf8')
 if (!compose.includes('gateway:') || !compose.includes('expose:') || !compose.includes('nginx-compose.conf')) fail('docker compose gateway wiring missing')
 const nginxCompose = await readFile(path.join(root, 'deploy', 'nginx-compose.conf'), 'utf8')
@@ -119,8 +133,8 @@ const schemaCheck = await readFile(path.join(root, 'scripts', 'check-fns-schema.
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-for (const script of ['build','prebuild','preflight','gateway:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:schema:check','kontur:schema:save','fns:schema:check']) {
+for (const script of ['build','prebuild','preflight','audit:test','gateway:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','kontur:schema:check','kontur:schema:save','fns:schema:check']) {
   if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
 }
 
-console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, T1 directories, draft-v4, Kontur schema/UserData/GenerateTitle boundaries and fail-closed operator checks passed`)
+console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, privacy-safe audit, draft-v4 and Kontur schema/UserData/GenerateTitle boundaries verified`)
