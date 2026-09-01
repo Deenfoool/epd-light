@@ -10,10 +10,10 @@ const requireAll = (name, text, snippets) => {
 }
 
 const gitignore = await read('.gitignore')
-requireAll('.gitignore', gitignore, ['.env\n', '.env.*', '!.env.example', '.backups', '*.dump.enc', '*.dump.sha256'])
+requireAll('.gitignore', gitignore, ['.env\n', '.env.*', '!.env.example', '.backups', '.epd-light-migration.lock', '*.dump.enc', '*.dump.sha256'])
 
 const dockerignore = await read('.dockerignore')
-requireAll('.dockerignore', dockerignore, ['.git', '.env', '.env.*', 'node_modules', 'src/App.tsx', '.backups', '*.dump.enc'])
+requireAll('.dockerignore', dockerignore, ['.git', '.env', '.env.*', 'node_modules', 'src/App.tsx', '.backups', '.epd-light-migration.lock', '*.dump.enc'])
 
 const compose = await read('docker-compose.yml')
 requireAll('docker-compose.yml', compose, [
@@ -39,6 +39,7 @@ const serverDay = await read('deploy', 'server-day.sh')
 requireAll('server-day.sh', serverDay, [
   'scripts/check-deployment-env.mjs',
   'scripts/preflight.mjs',
+  'scripts/test-idempotency.mjs',
   'docker compose --env-file',
   'externalSendEnabled',
   '127.0.0.1:8080',
@@ -48,8 +49,12 @@ const backup = await read('deploy', 'backup-postgres.sh')
 requireAll('backup-postgres.sh', backup, [
   'EPD_DATABASE_URL', 'EPD_BACKUP_PASSPHRASE', 'pg_dump --format=custom',
   'openssl enc -aes-256-cbc', '-pbkdf2', '-iter 200000', 'verify-postgres-backup.sh',
-  'EPD_BACKUP_RETENTION_DAYS', 'contains_passphrase=false',
+  'EPD_BACKUP_RETENTION_DAYS', 'contains_passphrase=false', '.epd-light-backup.lock',
+  'PGDATABASE="$EPD_DATABASE_URL" pg_dump', '-e EPD_DATABASE_URL',
 ])
+if (backup.includes('-e EPD_DATABASE_URL="$DB_URL"') || backup.includes('pg_dump') && backup.includes('"$EPD_DATABASE_URL"\'')) {
+  fail('backup script must not place database URL in docker/pg_dump argv')
+}
 if (backup.includes('echo "$DB_URL"') || backup.includes('echo "$PASSPHRASE"')) fail('backup script must never print database URL or backup passphrase')
 
 const verifyBackup = await read('deploy', 'verify-postgres-backup.sh')
@@ -63,6 +68,18 @@ requireAll('test-restore-postgres.sh', restoreTest, [
   'test database name must contain test, restore, or staging', 'pg_restore --clean --if-exists',
   "to_regclass('public.documents')", "to_regclass('public.profiles')",
 ])
+
+const migrations = await read('deploy', 'apply-migrations.sh')
+requireAll('apply-migrations.sh', migrations, [
+  'EPD_MIGRATION_CONFIRM', 'APPLY_MIGRATIONS', '.epd-light-migration.lock',
+  'Pre-migration encrypted backup', 'Post-migration encrypted backup',
+  'public.epd_light_schema_migrations', 'applied migration checksum changed',
+  '--single-transaction', 'revoke all on public.epd_light_schema_migrations from anon, authenticated',
+  'PGDATABASE="$EPD_DATABASE_URL" exec psql', '-e EPD_DATABASE_URL',
+])
+if (migrations.includes('-e EPD_DATABASE_URL="$DB_URL"') || migrations.includes('psql "$DB_URL"')) {
+  fail('migration runner must not place database URL in docker/psql argv')
+}
 
 const envExample = await read('.env.example')
 requireAll('.env.example', envExample, [
@@ -78,7 +95,7 @@ requireAll('.env.example', envExample, [
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['deploy:server-day', 'backup:create', 'backup:verify', 'backup:restore:test']) {
+for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 for (const [section, dependencies] of Object.entries({ dependencies: pkg.dependencies || {}, devDependencies: pkg.devDependencies || {} })) {
@@ -87,4 +104,4 @@ for (const [section, dependencies] of Object.entries({ dependencies: pkg.depende
   }
 }
 
-console.log('Deploy preflight OK: env/backups ignored, loopback binding, private gateway, HTTPS template, encrypted backup/restore safeguards and pinned dependencies verified')
+console.log('Deploy preflight OK: secrets/backups ignored, guarded checksum migrations, loopback binding, private gateway, HTTPS template, encrypted backup/restore safeguards and pinned dependencies verified')
