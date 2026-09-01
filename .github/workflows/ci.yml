@@ -20,18 +20,22 @@ jobs:
       - name: Gateway and script syntax
         run: |
           node --check server/index.mjs
+          node --check server/audit.mjs
           node --check server/providers/kontur.mjs
           node --check server/providers/kontur-userdata.mjs
           node --check server/services/kontur-title.mjs
           node --check scripts/preflight.mjs
           node --check scripts/check-fns-schema.mjs
           node --check scripts/check-kontur-schemas.mjs
+          node --check scripts/test-audit.mjs
           node --check scripts/test-gateway.mjs
           node --check scripts/test-kontur-provider.mjs
           node --check scripts/test-kontur-userdata.mjs
           node --check scripts/test-kontur-generation.mjs
       - name: Offline invariants
         run: npm run preflight
+      - name: Privacy-safe audit
+        run: npm run audit:test
       - name: Gateway smoke test
         run: npm run gateway:test
       - name: Kontur provider contract
