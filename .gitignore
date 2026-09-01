@@ -8,6 +8,7 @@ dist
 src/App.tsx
 .cache
 .backups
+.epd-light-migration.lock
 *.dump
 *.dump.enc
 *.dump.sha256
