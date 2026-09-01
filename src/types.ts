@@ -43,6 +43,19 @@ export type CargoItem = {
   currency?: string
 }
 
+export type LoadingDetailsDraft = {
+  /** Значение будущего атрибута MatchingShipper: '', '0' или '1'. */
+  matchingShipper: string
+  employeeFullName: string
+  employeePosition: string
+  employeeResponsibilities: string
+  /** ИНН лица, осуществляющего погрузку; при MatchingShipper=1 может совпадать с ИНН грузоотправителя. */
+  partyInn: string
+  /** Код Type из актуального UserDataXsd для LoadingOwnerDetails. */
+  ownerType: string
+  ownerInn: string
+}
+
 export type EtrnData = {
   shipper: Party
   consignee: Party
@@ -64,6 +77,7 @@ export type EtrnData = {
     actualWeight?: string
     actualPlaces?: string
   }
+  loadingDetails?: LoadingDetailsDraft
   cargo: CargoItem[]
   transport: {
     brand: string
