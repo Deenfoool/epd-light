@@ -2,35 +2,45 @@
 
 MVP SaaS-сервиса для подготовки, проверки и хранения **черновиков электронной транспортной накладной (ЭТрН)** для российского малого и среднего бизнеса.
 
-> **Важно:** проект не является оператором ИС ЭПД, не подписывает документы КЭП и не отправляет сведения в ГИС ЭПД. Экспортируемый JSON, UserDataXml preview и печатная форма — черновые/интеграционные представления, а не юридически значимый документ.
+> **Важно:** проект не является оператором ИС ЭПД. Production-отправка, подписание и `PostMessage` не реализованы. Даже результат sandbox `GenerateTitleXml` не является подписанным или отправленным ЭПД.
 
 ## Что уже реализовано
 
 - публичный лендинг, FAQ, CTA, тарифы и правовые шаблоны;
-- официальные ссылки на ФНС и Минтранс;
-- регистрация/вход через Supabase Auth;
-- безопасный демо-режим на `localStorage`, если Supabase не настроен;
-- онбординг организации;
-- dashboard;
-- список черновиков с поиском, фильтрами, дублированием, архивом и удалением;
-- 6-шаговый мастер ЭТрН: участники → маршрут/погрузка → груз → транспорт/водитель → условия → проверка;
-- автосохранение черновика и защита от потери последних изменений;
+- регистрация/вход через Supabase Auth и demo-режим на `localStorage`;
+- dashboard, список документов и 6-шаговый мастер ЭТрН;
+- автосохранение и защита от потери последних изменений;
 - draft-model v4 с обратной нормализацией старых черновиков;
-- отдельные базовая готовность и operator-readiness;
-- статус `Черновик готов`, который не выдаётся за XSD/операторскую готовность;
+- базовая валидация отдельно от operator-readiness;
 - печатное превью с watermark `ЧЕРНОВИК — НЕ ЯВЛЯЕТСЯ ПЕРЕВОЗОЧНЫМ ДОКУМЕНТОМ`;
-- экспорт нормализованного JSON и operator-neutral `Integration JSON`;
+- нормализованный JSON и operator-neutral `Integration JSON`;
 - структурированные российские адреса;
-- данные T1-кандидата: BoxId, ContainerType, Ownership, WeighingMethod, ВУ, фактическая погрузка, `LoadingPartyDetails` и `LoadingOwnerDetails`;
-- CRUD-справочники контрагентов, транспорта и водителей с T1-полями;
-- CSV-импорт контрагентов, включая `box_id` и структурированный адрес, и CSV-импорт груза;
-- backend gateway с `/healthz`, capabilities и server preflight;
-- локальный `Kontur UserDataXml preview` без внешнего вызова оператора;
-- server-only boundary `operator candidate -> UserDataXml -> GenerateTitleXml`, не опубликованный в gateway;
-- автоматический разбор `GetDocumentTypes (V3)` для поиска T1 `XsdUrl`/`UserDataXsdUrl` и загрузки схем через `GetContent`;
-- `POST /api/operator/send` жёстко заблокирован и всегда остаётся fail-closed;
+- T1-поля: BoxId, ContainerType, Ownership, WeighingMethod, ВУ, фактическая погрузка, `LoadingPartyDetails`, `LoadingOwnerDetails`;
+- справочники контрагентов, транспорта и водителей с T1-полями;
+- CSV-импорт контрагентов и груза;
+- private backend gateway за nginx;
+- Supabase JWT/JWKS-аутентификация gateway по асимметричной подписи;
+- rate limiting: отдельные лимиты до auth, после auth и для реальных внешних operator-вызовов;
+- privacy-safe audit без request body, XML, токенов, ФИО и других данных документа;
+- локальный `Kontur UserDataXml preview` без обращения к оператору;
+- server-side canonical document repository через Supabase Data API под **пользовательским JWT**;
+- RLS `auth.uid() = user_id` остаётся авторитетной проверкой доступа к документу;
+- backend заново строит operator candidate из строки `documents`, а не доверяет Integration JSON из браузера;
+- автоматический разбор `GetDocumentTypes (V3)` для поиска T1 `XsdUrl`/`UserDataXsdUrl`;
+- server-only `GenerateTitleXml` boundary;
+- **sandbox gateway route** `/api/operator/kontur/generate-title-sandbox`, который:
+  - включается только при `EPD_OPERATOR_MODE=sandbox` и `EPD_OPERATOR_PROVIDER=kontur`;
+  - требует проверенный Supabase JWT;
+  - принимает только `{ "documentId": "..." }`;
+  - перечитывает документ через Supabase RLS;
+  - повторно проверяет владельца;
+  - вызывает только `GenerateTitleXml`;
+  - не подписывает XML;
+  - не вызывает `PostMessage`;
+- кнопка `Kontur sandbox` на карточке документа появляется только когда backend сообщает `ready=true`;
+- `/api/operator/send` остаётся жёстко заблокированным;
 - SQL-миграции Supabase с Row Level Security;
-- офлайн preflight и отдельные тесты gateway/Kontur-контрактов.
+- офлайн preflight и отдельные тесты auth/RLS/Kontur/security boundaries.
 
 ## Быстрый запуск
 
@@ -40,11 +50,9 @@ npm run preflight
 npm run dev
 ```
 
-Без `.env` приложение запустится в демо-режиме. Данные будут храниться только в браузере.
+Без `.env` приложение запускается в demo-режиме. Данные хранятся в браузере.
 
-### Supabase / PostgreSQL
-
-Для локальной разработки можно использовать обычный Supabase-проект. **Для коммерческого запуска в РФ не размещайте базу с персональными данными российских граждан за пределами РФ без отдельной юридической проверки.** Практичный вариант — self-hosted Supabase/PostgreSQL в российском дата-центре либо другой совместимый российский контур.
+## Supabase / PostgreSQL
 
 Примените миграции по порядку:
 
@@ -53,73 +61,132 @@ supabase/migrations/202609010001_init.sql
 supabase/migrations/202609010002_extend_directories_t1.sql
 ```
 
-Затем скопируйте `.env.example` в `.env` и настройте публичные параметры frontend. Секреты оператора никогда не помещаются в `VITE_*`.
+Для production-контуров с персональными данными российских граждан размещение и архитектуру нужно отдельно сверить с применимыми требованиями российского законодательства. Практический целевой вариант проекта — PostgreSQL/Auth/backend в российском контуре.
 
-## Проверка и сборка
+Секреты оператора и любые server-only ключи никогда не помещаются в `VITE_*`.
 
-Основные офлайн-проверки:
+## Основные проверки
 
 ```bash
 npm run preflight
+npm run audit:test
+npm run authorization:test
+npm run repository:test
+npm run rate-limit:test
 npm run gateway:test
 npm run kontur:provider:test
 npm run kontur:userdata:test
 npm run kontur:generation:test
+npm run kontur:sandbox:test
 ```
 
-Полная production-сборка:
+После `npm install` также доступны криптографические тесты JWT/JWKS:
+
+```bash
+npm run auth:test
+npm run gateway:auth:test
+```
+
+Production-сборка:
 
 ```bash
 npm run build
 npm run preview
 ```
 
-### Проверка схем
+## Проверка схем
 
-Схему черновика ФНС можно проверить без операторских реквизитов:
+Проверка опубликованной схемы ФНС:
 
 ```bash
 npm run fns:schema:check
 ```
 
-После получения **sandbox** BoxId и access token Диадока серверная утилита сможет сама найти актуальный T1 через `GetDocumentTypes (V3)`, скачать `XsdUrl` и `UserDataXsdUrl` через `GetContent` и вывести SHA-256:
+После получения sandbox BoxId и access token Диадока:
 
 ```bash
 npm run kontur:schema:check
 ```
 
-Сохранить копии в игнорируемый `.cache/kontur`:
+Команда через `GetDocumentTypes (V3) + GetContent` находит текущий зафиксированный T1-контракт, получает Title XSD/UserDataXsd и выводит SHA-256. Новая версия не подхватывается автоматически: изменение контракта требует ручной проверки mapping.
+
+Сохранить схемы в игнорируемый `.cache/kontur`:
 
 ```bash
 npm run kontur:schema:save
 ```
 
-Эти команды используют только `EPD_KONTUR_BOX_ID` и `EPD_KONTUR_ACCESS_TOKEN` на backend/CLI и не включают отправку документа.
+## Три разных уровня интеграции
 
-## Интеграция с оператором ИС ЭПД
-
-Подробности: [`docs/OPERATOR-INTEGRATION.md`](docs/OPERATOR-INTEGRATION.md) и [`docs/BACKEND-GATEWAY.md`](docs/BACKEND-GATEWAY.md).
-
-Текущий Контур T1-контракт:
+### 1. Local preview
 
 ```text
-LogisticsWaybill / reception / kl_trn_mt_05_01 / titleIndex=0
+Browser -> Integration JSON -> gateway -> UserDataXml preview
 ```
 
-Публичный gateway умеет только локальный preview. `GenerateTitleXml` подготовлен как server-only boundary для будущего sandbox. `PostMessage`, подписание и реальная отправка не реализованы.
+Внешнего вызова Контур нет.
+
+### 2. Sandbox GenerateTitleXml
+
+```text
+Browser sends documentId
+  -> JWT/JWKS auth
+  -> rate limit
+  -> Supabase Data API with USER JWT
+  -> RLS
+  -> canonical documents row
+  -> server mapping
+  -> ownership check
+  -> UserDataXml
+  -> Kontur GenerateTitleXml
+```
+
+Для намеренного включения:
+
+```env
+EPD_OPERATOR_PROVIDER=kontur
+EPD_OPERATOR_MODE=sandbox
+EPD_GATEWAY_AUTH_MODE=supabase
+EPD_AUTH_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+EPD_DATA_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+EPD_DATA_SUPABASE_PUBLIC_KEY=YOUR_PUBLIC_ANON_OR_PUBLISHABLE_KEY
+EPD_KONTUR_BOX_ID=...
+EPD_KONTUR_ACCESS_TOKEN=...
+```
+
+Sandbox-результат скачивается как XML, но **не подписывается и не отправляется**.
+
+### 3. Production send
+
+Пока отсутствует намеренно:
+
+```text
+GenerateTitleXml -> signing -> PostMessage -> operator statuses -> GIS EPD
+```
+
+`POST /api/operator/send` отвечает `503 operator_send_disabled`.
 
 ## Что нужно до коммерческого запуска
 
-- получить sandbox/партнёрский доступ выбранного аккредитованного оператора;
-- получить актуальные XSD/UserDataXsd через API оператора и зафиксировать их версии/хэши;
-- проверить перечисления и условную обязательность всех T1-полей;
+- получить реальный sandbox/партнёрский доступ выбранного оператора;
+- получить актуальные XSD/UserDataXsd и зафиксировать версии/хэши;
+- прогнать наш canonical mapping через реальный `GenerateTitleXml`;
+- исправить все отклонения от UserDataXsd;
 - реализовать ИП и остальные допустимые типы участников;
 - решить timezone-модель для фактических времён;
-- прогнать `GenerateTitleXml` и `ParseTitleXml` в sandbox;
-- добавить аутентификацию/авторизацию backend-вызовов, rate limiting и минимизированный аудит;
-- реализовать signing flow;
-- только после этого проектировать `PostMessage (V3)` и юридически значимые статусы;
-- завершить production-контур данных в РФ, правовые документы, security-тесты и биллинг.
+- выполнить sandbox `ParseTitleXml`/обратную проверку результата;
+- определить и реализовать signing flow;
+- только после этого проектировать `PostMessage` и юридически значимые статусы;
+- развернуть production-контур данных в РФ;
+- настроить домен, HTTPS, backups, мониторинг и recovery;
+- завершить правовые документы, security-тесты и биллинг.
+
+## Документация
+
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+- [`docs/BACKEND-GATEWAY.md`](docs/BACKEND-GATEWAY.md)
+- [`docs/OPERATOR-INTEGRATION.md`](docs/OPERATOR-INTEGRATION.md)
+- [`docs/FNS-ETRN-MAPPING.md`](docs/FNS-ETRN-MAPPING.md)
 
 ## Официальные источники
 
@@ -130,6 +197,6 @@ LogisticsWaybill / reception / kl_trn_mt_05_01 / titleIndex=0
 - Диадок API — ЭТрН: https://developer.kontur.ru/doc/diadoc-api/instructions/documents/formal/waybill.html
 - Диадок API — GetDocumentTypes V3: https://developer.kontur.ru/doc/diadoc-api/http/GetDocumentTypes_V3.html
 
-## Структура исходника приложения
+## Структура SPA-исходника
 
-Основной SPA-компонент временно хранится в читаемых частях `src/app-chunks/App.*.part`. Перед `npm run dev` и `npm run build` скрипт `scripts/assemble-app.mjs` автоматически собирает из них `src/App.tsx`. Сгенерированный `src/App.tsx` добавлен в `.gitignore`.
+Основной SPA-компонент временно хранится в `src/app-chunks/App.*.part`. Перед `npm run dev` и `npm run build` `scripts/assemble-app.mjs` собирает их в игнорируемый `src/App.tsx`.
