@@ -1,5 +1,8 @@
-import { generateAuthorizedKonturT1 } from './kontur-title.mjs'
+import { authorizeExternalOperatorDocument } from '../authorization.mjs'
+import { buildOperatorActionIdentity, runInFlightOnce } from '../idempotency.mjs'
+import { KONTUR_T1_CONTRACT } from '../providers/kontur.mjs'
 import { createSupabaseOwnedCandidateLoader } from '../repositories/supabase-documents.mjs'
+import { generateKonturT1FromCandidate } from './kontur-title.mjs'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -45,14 +48,40 @@ export async function generateKonturSandboxTitleForDocument({
     fetchImpl: repositoryFetchImpl,
   })
 
-  return generateAuthorizedKonturT1({
-    auth,
-    documentId,
-    loadOwnedCandidate,
+  const authorization = await authorizeExternalOperatorDocument({ auth, documentId, loadOwnedCandidate })
+  if (!authorization.ok) {
+    const error = new Error(`Kontur sandbox authorization failed: ${authorization.error}`)
+    error.code = authorization.error
+    error.statusCode = authorization.status
+    throw error
+  }
+
+  const identity = buildOperatorActionIdentity({
+    candidate: authorization.candidate,
+    provider: 'kontur',
+    mode: 'sandbox',
+    operation: 'generate_title',
+    documentVersion: KONTUR_T1_CONTRACT.documentVersion,
+    titleIndex: KONTUR_T1_CONTRACT.titleIndex,
+  })
+
+  const execution = await runInFlightOnce(identity, () => generateKonturT1FromCandidate({
+    candidate: authorization.candidate,
     config: konturConfig,
     fetchImpl: konturFetchImpl,
     ...(konturBaseUrl ? { baseUrl: konturBaseUrl } : {}),
-  })
+  }))
+
+  return {
+    ...execution.result,
+    idempotency: {
+      idempotencyKey: identity.idempotencyKey,
+      requestFingerprint: identity.requestFingerprint,
+      sourceRevision: identity.sourceRevision,
+      sharedInFlight: execution.sharedInFlight,
+      completedPersistenceWired: false,
+    },
+  }
 }
 
 export const KONTUR_SANDBOX_GENERATION_POLICY = Object.freeze({
@@ -61,8 +90,12 @@ export const KONTUR_SANDBOX_GENERATION_POLICY = Object.freeze({
   enabledProvider: 'kontur',
   requestFields: ['documentId'],
   clientDocumentPayloadAccepted: false,
+  clientIdempotencyKeyAccepted: false,
   verifiedJwtRequired: true,
   supabaseRlsReloadRequired: true,
+  concurrentDuplicateExternalCallsCollapsed: true,
+  completedAttemptPersistenceTableReady: true,
+  completedAttemptPersistenceWired: false,
   callsGenerateTitleXml: true,
   callsPostMessage: false,
   signsDocument: false,
