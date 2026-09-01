@@ -6,3 +6,8 @@ dist
 .env.*
 *.log
 src/App.tsx
+.backups
+*.dump
+*.dump.enc
+*.dump.sha256
+*.dump.meta
