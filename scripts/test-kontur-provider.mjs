@@ -1,5 +1,6 @@
 import {
   KONTUR_T1_CONTRACT,
+  analyzeKonturT1Contract,
   buildKonturContentUrl,
   buildKonturGenerateT1Url,
   buildKonturGetDocumentTypesUrl,
@@ -10,6 +11,7 @@ import {
   getKonturDocumentTypes,
   konturConfigStatus,
   konturPublicCapabilities,
+  listKonturLogisticsWaybillContracts,
 } from '../server/providers/kontur.mjs'
 
 const assert = (condition, message) => {
@@ -63,12 +65,38 @@ assert(descriptor?.titleIndex === 0, 'T1 descriptor title not found')
 assert(descriptor?.xsdUrl.includes('TitleXsd'), 'XsdUrl missing from descriptor')
 assert(descriptor?.userDataXsdUrl.includes('UserContractXsd'), 'UserDataXsdUrl missing from descriptor')
 assert(findKonturT1Descriptor({ DocumentTypes: [] }) === null, 'unknown contract must not be guessed')
+const pinnedAnalysis = analyzeKonturT1Contract(descriptorFixture)
+assert(pinnedAnalysis.matchesPinned === true, 'pinned contract analysis should match')
+assert(pinnedAnalysis.available.length === 1, 'pinned fixture should expose one available title')
+
+const driftFixture = {
+  DocumentTypes: [{
+    Name: 'LogisticsWaybill',
+    Functions: [{
+      Name: 'reception',
+      Versions: [{
+        Version: 'kl_trn_mt_06_00',
+        Titles: [{ Index: 0, IsFormal: true, XsdUrl: '/new-title.xsd', UserDataXsdUrl: '/new-userdata.xsd' }],
+      }],
+    }, {
+      Name: 'other-function',
+      Versions: [{ Version: '1', Titles: [{ Index: 0, IsFormal: true, XsdUrl: '/other.xsd', UserDataXsdUrl: '/other-user.xsd' }] }],
+    }],
+  }],
+}
+const available = listKonturLogisticsWaybillContracts(driftFixture)
+assert(available.some((x) => x.documentVersion === 'kl_trn_mt_06_00' && x.documentFunction === 'reception'), 'new reception version should be visible as metadata')
+const driftAnalysis = analyzeKonturT1Contract(driftFixture)
+assert(driftAnalysis.matchesPinned === false, 'new version must not silently match pinned contract')
+assert(driftAnalysis.descriptor === null, 'drift analysis must not auto-select a new version')
+assert(driftAnalysis.pinned.documentVersion === 'kl_trn_mt_05_01', 'pinned version must remain unchanged')
 
 const emptyStatus = konturConfigStatus({ boxId: '', accessToken: '' })
 assert(emptyStatus.configured === false && emptyStatus.missing.length === 2, 'empty config must be rejected')
 const caps = konturPublicCapabilities({ boxId: 'box', accessToken: 'secret' })
 assert(caps.credentialsConfigured === true, 'configured capability must be detected')
 assert(caps.schemaDiscoveryReady === true, 'schema discovery should be ready server-side')
+assert(caps.schemaDriftFailClosed === true, 'schema drift must remain fail-closed')
 assert(caps.schemaDiscoveryWiredToGateway === false, 'schema discovery must not be public gateway route')
 assert(caps.userDataPreviewWiredToGateway === true, 'local UserData preview should be gateway-wired')
 assert(caps.userDataPreviewExternalCall === false, 'UserData preview must remain local-only')
@@ -121,6 +149,20 @@ const discovered = await discoverKonturT1Descriptor({
 assert(discoveryCalls === 1, 'schema discovery should call GetDocumentTypes once')
 assert(discovered.userDataXsdUrl.includes('UserContractXsd'), 'discovery did not return UserDataXsdUrl')
 
+let driftFailed = false
+try {
+  await discoverKonturT1Descriptor({
+    boxId: 'box-drift', accessToken: 'token-drift', baseUrl: 'https://example.test',
+    fetchImpl: async () => new Response(JSON.stringify(driftFixture), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+} catch (error) {
+  driftFailed = error?.code === 'kontur_contract_drift'
+    && error?.pinned?.documentVersion === 'kl_trn_mt_05_01'
+    && Array.isArray(error?.available)
+    && error.available.some((x) => x.documentVersion === 'kl_trn_mt_06_00')
+}
+assert(driftFailed, 'schema discovery must fail closed and report available versions on drift')
+
 let contentRequest
 const content = await getKonturContent({
   contentPath: discovered.userDataXsdUrl,
@@ -143,4 +185,4 @@ try {
 }
 assert(missingTokenFailed, 'missing access token must fail before network request')
 
-console.log('Kontur provider offline test OK: contract, GetDocumentTypes/GetContent schema discovery, Bearer auth, private GenerateTitle boundary and fail-closed sending verified')
+console.log('Kontur provider offline test OK: schema discovery/drift, Bearer auth, private GenerateTitle boundary and fail-closed sending verified')
