@@ -7,3 +7,8 @@ dist
 *.log
 src/App.tsx
 .cache
+.backups
+*.dump
+*.dump.enc
+*.dump.sha256
+*.dump.meta
