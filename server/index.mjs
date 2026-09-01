@@ -1,5 +1,6 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { auditErrorCode, writeGatewayAudit } from './audit.mjs'
 import { konturPublicCapabilities } from './providers/kontur.mjs'
 import { KONTUR_USERDATA_PREVIEW_CONTRACT, buildKonturT1UserDataXml, validateKonturT1Candidate } from './providers/kontur-userdata.mjs'
 
@@ -94,8 +95,23 @@ function providerCapabilities() {
 
 const server = createServer(async (req, res) => {
   const requestId = randomUUID()
+  const startedAt = Date.now()
   const origin = req.headers.origin || ''
   const url = new URL(req.url || '/', 'http://gateway.local')
+
+  const audit = (httpStatus, errorCode = null) => writeGatewayAudit({
+    requestId,
+    method: req.method || '',
+    path: url.pathname,
+    provider,
+    httpStatus,
+    durationMs: Date.now() - startedAt,
+    errorCode,
+  })
+  const respond = (status, payload, errorCode) => {
+    sendJson(res, status, payload, requestId, origin)
+    audit(status, errorCode ?? auditErrorCode(payload, status))
+  }
 
   if (req.method === 'OPTIONS') {
     if (origin && allowedOrigins.has(origin)) {
@@ -106,19 +122,20 @@ const server = createServer(async (req, res) => {
         'access-control-max-age': '600',
       })
       res.end()
+      audit(204)
     } else {
-      sendJson(res, 403, { error: 'origin_not_allowed', requestId }, requestId, origin)
+      respond(403, { error: 'origin_not_allowed', requestId })
     }
     return
   }
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
-    sendJson(res, 200, { ok: true, service: 'epd-light-operator-gateway', requestId }, requestId, origin)
+    respond(200, { ok: true, service: 'epd-light-operator-gateway', requestId })
     return
   }
 
   if (req.method === 'GET' && url.pathname === '/api/operator/capabilities') {
-    sendJson(res, 200, {
+    respond(200, {
       service: 'epd-light-operator-gateway',
       provider,
       mode: operatorMode,
@@ -130,7 +147,7 @@ const server = createServer(async (req, res) => {
       providerAdapter: providerCapabilities(),
       message: 'Gateway умеет локально собирать preview UserDataXml, но GenerateTitleXml, подписание и отправка наружу намеренно отключены.',
       requestId,
-    }, requestId, origin)
+    })
     return
   }
 
@@ -138,10 +155,10 @@ const server = createServer(async (req, res) => {
     try {
       const body = await readJson(req)
       const result = preflightCandidate(body)
-      sendJson(res, result.ok ? 200 : 422, { ...result, requestId }, requestId, origin)
+      respond(result.ok ? 200 : 422, { ...result, requestId }, result.ok ? null : 'candidate_invalid')
     } catch (error) {
       const status = Number(error?.statusCode || 500)
-      sendJson(res, status, { error: error instanceof Error ? error.message : 'request failed', requestId }, requestId, origin)
+      respond(status, { error: error instanceof Error ? error.message : 'request failed', requestId }, status === 400 ? 'invalid_json' : status === 413 ? 'body_too_large' : 'request_failed')
     }
     return
   }
@@ -151,11 +168,11 @@ const server = createServer(async (req, res) => {
       const body = await readJson(req)
       const validation = validateKonturT1Candidate(body)
       if (!validation.ok) {
-        sendJson(res, 422, { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId }, requestId, origin)
+        respond(422, { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId }, 'kontur_candidate_invalid')
         return
       }
       const xml = buildKonturT1UserDataXml(body)
-      sendJson(res, 200, {
+      respond(200, {
         ok: true,
         errors: [],
         warnings: validation.warnings,
@@ -163,27 +180,27 @@ const server = createServer(async (req, res) => {
         contract: KONTUR_USERDATA_PREVIEW_CONTRACT,
         externalCallMade: false,
         requestId,
-      }, requestId, origin)
+      })
     } catch (error) {
       const status = Number(error?.statusCode || 500)
       const validation = error?.validation
-      sendJson(res, validation ? 422 : status, validation ? { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId } : { error: error instanceof Error ? error.message : 'request failed', requestId }, requestId, origin)
+      respond(validation ? 422 : status, validation ? { ...validation, contract: KONTUR_USERDATA_PREVIEW_CONTRACT, requestId } : { error: error instanceof Error ? error.message : 'request failed', requestId }, validation ? 'kontur_candidate_invalid' : status === 400 ? 'invalid_json' : status === 413 ? 'body_too_large' : 'request_failed')
     }
     return
   }
 
   if (req.method === 'POST' && url.pathname === '/api/operator/send') {
-    sendJson(res, 503, {
+    respond(503, {
       error: 'operator_send_disabled',
       provider,
       mode: operatorMode,
       message: 'Юридически значимая отправка заблокирована: GenerateTitleXml/PostMessage не подключены к gateway, а подписание и операторский тестовый контур не настроены.',
       requestId,
-    }, requestId, origin)
+    })
     return
   }
 
-  sendJson(res, 404, { error: 'not_found', requestId }, requestId, origin)
+  respond(404, { error: 'not_found', requestId })
 })
 
 server.requestTimeout = 15_000
