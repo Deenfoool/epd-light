@@ -1,0 +1,24 @@
+# Replace epd.example.ru with the real production domain.
+# Caddy obtains and renews TLS certificates automatically when DNS already points to this server.
+
+epd.example.ru {
+    encode zstd gzip
+
+    request_body {
+        max_size 1MB
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server
+    }
+
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}
