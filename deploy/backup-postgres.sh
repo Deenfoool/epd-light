@@ -39,8 +39,16 @@ esac
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR" 2>/dev/null || true
 
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+LOCK_DIR="$BACKUP_DIR/.epd-light-backup.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "ERROR: another EPD Light backup appears to be running: $LOCK_DIR" >&2
+  exit 1
+fi
+
+CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 BASENAME="epd-light-${STAMP}.dump.enc"
+DUMP_TMP_NAME=".epd-light-pgdump-$$.tmp"
 PLAIN_TMP="$BACKUP_DIR/.epd-light-${STAMP}.dump.tmp"
 ENC_TMP="$BACKUP_DIR/.${BASENAME}.tmp"
 FINAL_FILE="$BACKUP_DIR/$BASENAME"
@@ -48,7 +56,8 @@ CHECKSUM_FILE="$FINAL_FILE.sha256"
 META_FILE="$FINAL_FILE.meta"
 
 cleanup() {
-  rm -f "$PLAIN_TMP" "$ENC_TMP"
+  rm -f "$BACKUP_DIR/$DUMP_TMP_NAME" "$PLAIN_TMP" "$ENC_TMP"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -57,11 +66,12 @@ echo "Creating encrypted PostgreSQL backup: $FINAL_FILE"
 # The database URL exists only in the temporary pg client container environment.
 docker run --rm \
   -e EPD_DATABASE_URL="$DB_URL" \
+  -e EPD_DUMP_TMP_NAME="$DUMP_TMP_NAME" \
   -v "$BACKUP_DIR:/backup" \
   "$POSTGRES_IMAGE" \
-  sh -eu -c 'pg_dump --format=custom --compress=6 --no-owner --no-acl --file="/backup/.epd-light-pgdump.tmp" "$EPD_DATABASE_URL"'
+  sh -eu -c 'pg_dump --format=custom --compress=6 --no-owner --no-acl --file="/backup/$EPD_DUMP_TMP_NAME" "$EPD_DATABASE_URL"'
 
-mv "$BACKUP_DIR/.epd-light-pgdump.tmp" "$PLAIN_TMP"
+mv "$BACKUP_DIR/$DUMP_TMP_NAME" "$PLAIN_TMP"
 if [ ! -s "$PLAIN_TMP" ]; then
   echo "ERROR: pg_dump produced an empty file" >&2
   exit 1
@@ -99,7 +109,7 @@ fi
 chmod 600 "$CHECKSUM_FILE" 2>/dev/null || true
 
 {
-  echo "created_at_utc=$STAMP"
+  echo "created_at_utc=$CREATED_AT"
   echo "format=postgres-custom+openssl-aes-256-cbc"
   echo "openssl_pbkdf2_iterations=200000"
   echo "postgres_client_image=$POSTGRES_IMAGE"
