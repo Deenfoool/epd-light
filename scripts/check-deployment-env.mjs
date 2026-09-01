@@ -21,6 +21,20 @@ const httpsUrl = (name, { allowLocal = false } = {}) => {
     return ''
   }
 }
+const postgresUrl = (name) => {
+  const raw = required(name)
+  if (!raw) return null
+  try {
+    const url = new URL(raw)
+    if (!['postgres:', 'postgresql:'].includes(url.protocol)) errors.push(`${name} must use postgres:// or postgresql://`)
+    if (!url.hostname) errors.push(`${name} must contain a database host`)
+    if (!url.pathname || url.pathname === '/') errors.push(`${name} must contain a database name`)
+    return url
+  } catch {
+    errors.push(`${name} must be a valid PostgreSQL URL`)
+    return null
+  }
+}
 
 const frontendUrl = httpsUrl('VITE_SUPABASE_URL')
 const frontendKey = required('VITE_SUPABASE_ANON_KEY')
@@ -55,7 +69,8 @@ if (allowedOrigins) {
   if (origins.includes('*')) errors.push('Wildcard CORS origin is forbidden')
 }
 
-const allViteSecrets = Object.entries(env).filter(([name, v]) => name.startsWith('VITE_') && /(service.?role|secret|private|kontur|operator.*token|access.?token|refresh.?token|jwt.?secret)/i.test(`${name}=${v}`))
+const viteSecretPattern = /(service.?role|secret|private|kontur|operator.*token|access.?token|refresh.?token|jwt.?secret|database.?url|db.?url|backup.?pass|password)/i
+const allViteSecrets = Object.entries(env).filter(([name, v]) => name.startsWith('VITE_') && viteSecretPattern.test(`${name}=${v}`))
 if (allViteSecrets.length) errors.push(`Potential server secret exposed through VITE_*: ${allViteSecrets.map(([name]) => name).join(', ')}`)
 if (/service[_-]?role/i.test(frontendKey) || /service[_-]?role/i.test(dataKey)) errors.push('Supabase service_role must not be used as frontend/data public key')
 
@@ -74,8 +89,36 @@ if (operatorMode === 'sandbox') {
   required('EPD_KONTUR_BOX_ID')
   required('EPD_KONTUR_ACCESS_TOKEN')
   if (!value('EPD_EXTERNAL_RATE_LIMIT_MAX')) warnings.push('Sandbox uses default external rate limit 10/min')
-} else {
-  if (value('EPD_KONTUR_ACCESS_TOKEN')) warnings.push('Kontur access token is present while operator mode is disabled; remove it from hosts that do not need sandbox access')
+} else if (value('EPD_KONTUR_ACCESS_TOKEN')) {
+  warnings.push('Kontur access token is present while operator mode is disabled; remove it from hosts that do not need sandbox access')
+}
+
+const dbUrl = postgresUrl('EPD_DATABASE_URL')
+const backupPassphrase = required('EPD_BACKUP_PASSPHRASE')
+if (backupPassphrase && backupPassphrase.length < 20) errors.push('EPD_BACKUP_PASSPHRASE must contain at least 20 characters')
+if (dbUrl?.password && backupPassphrase) {
+  let dbPassword = dbUrl.password
+  try { dbPassword = decodeURIComponent(dbPassword) } catch {}
+  if (dbPassword && dbPassword === backupPassphrase) errors.push('Backup passphrase must differ from database password')
+}
+const retention = Number(value('EPD_BACKUP_RETENTION_DAYS') || 14)
+if (!Number.isInteger(retention) || retention < 7 || retention > 365) errors.push('EPD_BACKUP_RETENTION_DAYS must be an integer between 7 and 365')
+const backupDir = value('EPD_BACKUP_DIR') || '.backups'
+if (['/', '.', '..'].includes(backupDir)) errors.push('EPD_BACKUP_DIR must be a dedicated backup directory')
+const pgImage = value('EPD_POSTGRES_CLIENT_IMAGE') || 'postgres:17-alpine'
+if (/:(latest)$/i.test(pgImage) || !pgImage.includes(':')) errors.push('EPD_POSTGRES_CLIENT_IMAGE must pin an explicit image tag')
+
+const restoreUrlRaw = value('EPD_RESTORE_TEST_DATABASE_URL')
+if (restoreUrlRaw) {
+  try {
+    const restoreUrl = new URL(restoreUrlRaw)
+    if (!['postgres:', 'postgresql:'].includes(restoreUrl.protocol)) errors.push('EPD_RESTORE_TEST_DATABASE_URL must be PostgreSQL')
+    if (dbUrl && restoreUrl.toString() === dbUrl.toString()) errors.push('Restore-test database must differ from EPD_DATABASE_URL')
+    const restoreName = decodeURIComponent(restoreUrl.pathname.replace(/^\//, '')).toLowerCase()
+    if (!/(test|restore|staging)/.test(restoreName)) errors.push('Restore-test database name must contain test, restore, or staging')
+  } catch {
+    errors.push('EPD_RESTORE_TEST_DATABASE_URL must be a valid PostgreSQL URL when provided')
+  }
 }
 
 if (errors.length) {
@@ -91,4 +134,5 @@ console.log(`- operator mode: ${operatorMode}`)
 console.log(`- provider: ${provider}`)
 console.log(`- external operator limit: ${externalLimit}/${Math.round(rateWindow / 1000)}s`)
 console.log(`- allowed origins: ${allowedOrigins}`)
+console.log(`- encrypted database backups: configured, retention ${retention}d`)
 for (const warning of warnings) console.log(`- WARN: ${warning}`)
