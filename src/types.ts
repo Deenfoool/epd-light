@@ -113,7 +113,7 @@ export type DocumentRow = {
 
 export type Company = {
   id: string
-  org_type: OrgType
+  org_type?: OrgType
   name: string
   inn: string
   kpp: string
@@ -121,15 +121,15 @@ export type Company = {
   address: string
   phone: string
   email: string
-  edo_id: string
-  address_zip_code: string
-  address_region: string
-  address_city: string
-  address_settlement: string
-  address_street: string
-  address_building: string
-  address_corpus: string
-  address_apartment: string
+  edo_id?: string
+  address_zip_code?: string
+  address_region?: string
+  address_city?: string
+  address_settlement?: string
+  address_street?: string
+  address_building?: string
+  address_corpus?: string
+  address_apartment?: string
 }
 
 export type Vehicle = {
@@ -139,9 +139,9 @@ export type Vehicle = {
   plate: string
   vehicle_type: string
   trailer_plate: string
-  ownership_type: string
-  load_capacity: string
-  volume_capacity: string
+  ownership_type?: string
+  load_capacity?: string
+  volume_capacity?: string
 }
 
 export type Driver = {
@@ -149,9 +149,9 @@ export type Driver = {
   full_name: string
   phone: string
   license: string
-  license_series: string
-  license_number: string
-  license_date: string
+  license_series?: string
+  license_number?: string
+  license_date?: string
 }
 
 export type Profile = {
