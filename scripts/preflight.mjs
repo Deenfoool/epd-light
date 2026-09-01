@@ -19,9 +19,11 @@ const requiredSnippets = [
   'function Wizard(',
   'function Documents(',
   'function DirectoryPage',
+  'type DirectoryField',
   'function ImportPage(',
   'function Integrations(',
   'function RussianAddressEditor(',
+  'partyToCompany',
   'ЧЕРНОВИК — НЕ ЯВЛЯЕТСЯ ПЕРЕВОЗОЧНЫМ ДОКУМЕНТОМ',
   'Статусы «Передан оператору», «Подписан» и «Принят ГИС ЭПД» недоступны',
   'dirty.current=true',
@@ -35,7 +37,10 @@ const requiredSnippets = [
   'operatorReadiness',
   'Фактическое прибытие на погрузку',
   'Структурированный адрес погрузки',
-  'Серия ВУ',
+  'Код тары / ContainerType',
+  'Код Ownership (оператор)',
+  'license_series',
+  'address_region',
   'Номер заказа / заявки',
   'не валидирует XML по XSD ФНС',
   '/api/operator/capabilities',
@@ -51,13 +56,18 @@ for (const table of ['profiles','companies','vehicles','drivers','documents','in
 }
 if (!migration.includes('grant select, insert, update, delete on public.documents to authenticated')) fail('authenticated document grants missing')
 
+const directoryMigration = await readFile(path.join(root, 'supabase', 'migrations', '202609010002_extend_directories_t1.sql'), 'utf8')
+for (const snippet of ['add column if not exists org_type', 'add column if not exists edo_id', 'add column if not exists address_region', 'add column if not exists ownership_type', 'add column if not exists license_series', 'companies_org_type_check']) {
+  if (!directoryMigration.includes(snippet)) fail(`T1 directory migration invariant missing: ${snippet}`)
+}
+
 const operator = await readFile(path.join(root, 'src', 'operator.ts'), 'utf8')
 for (const snippet of ['interface OperatorAdapter', 'assertOperatorConfigured', 'sendToOperatorDisabled', 'Отправка оператору ИС ЭПД не настроена в MVP']) {
   if (!operator.includes(snippet)) fail(`operator safety invariant missing: ${snippet}`)
 }
 
 const etrn = await readFile(path.join(root, 'src', 'etrn.ts'), 'utf8')
-for (const snippet of ['FNS_ETRN_REFERENCE', "knd: '1110339'", "formatVersion: '5.01'", 'ON_TRNACLGROT_1_973_01_05_01_02', 'emptyRussianAddress', 'loadRussianAddress', 'normalizeEtrn', 'operatorReadiness', "schemaVersion:'epd-light/draft-3'"]) {
+for (const snippet of ['FNS_ETRN_REFERENCE', "knd: '1110339'", "formatVersion: '5.01'", 'ON_TRNACLGROT_1_973_01_05_01_02', 'emptyRussianAddress', 'loadRussianAddress', 'validGuid', 'BoxId должен иметь формат GUID', 'normalizeEtrn', 'operatorReadiness', "schemaVersion:'epd-light/draft-3'"]) {
   if (!etrn.includes(snippet)) fail(`draft-v3 invariant missing: ${snippet}`)
 }
 
@@ -77,7 +87,7 @@ for (const snippet of ["documentTypeNamedId: 'LogisticsWaybill'", "documentFunct
 }
 
 const konturUserData = await readFile(path.join(root, 'server', 'providers', 'kontur-userdata.mjs'), 'utf8')
-for (const snippet of ['validateKonturT1Candidate', 'buildKonturT1UserDataXml', '<LogisticsWaybillConsignorTitle', '<OrganizationReference', '<DeliveryAddres>', 'EnablingTimeZone="0"', 'xsdValidated: false']) {
+for (const snippet of ['validateKonturT1Candidate', 'buildKonturT1UserDataXml', '<LogisticsWaybillConsignorTitle', '<OrganizationReference', '<DeliveryAddres>', 'ContainerType', 'Ownership', 'WeighingMethod', 'EnablingTimeZone="0"', 'LoadingPartyDetails', 'xsdValidated: false']) {
   if (!konturUserData.includes(snippet)) fail(`Kontur UserData preview invariant missing: ${snippet}`)
 }
 
@@ -97,4 +107,4 @@ for (const script of ['build','prebuild','preflight','gateway:test','kontur:prov
   if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
 }
 
-console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, draft-v3, Kontur UserData preview and fail-closed operator checks passed`)
+console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, T1 directories, draft-v3, Kontur UserData preview and fail-closed operator checks passed`)
