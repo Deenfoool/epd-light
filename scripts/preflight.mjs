@@ -37,10 +37,14 @@ const requiredSnippets = [
   'operatorReadiness',
   'Фактическое прибытие на погрузку',
   'Структурированный адрес погрузки',
+  'Лицо и владелец места погрузки',
+  'MatchingShipper',
   'Код тары / ContainerType',
   'Код Ownership (оператор)',
   'license_series',
   'address_region',
+  'box_id',
+  'companies-example-t1.csv',
   'Номер заказа / заявки',
   'не валидирует XML по XSD ФНС',
   '/api/operator/capabilities',
@@ -67,12 +71,12 @@ for (const snippet of ['interface OperatorAdapter', 'assertOperatorConfigured', 
 }
 
 const etrn = await readFile(path.join(root, 'src', 'etrn.ts'), 'utf8')
-for (const snippet of ['FNS_ETRN_REFERENCE', "knd: '1110339'", "formatVersion: '5.01'", 'ON_TRNACLGROT_1_973_01_05_01_02', 'emptyRussianAddress', 'loadRussianAddress', 'validGuid', 'BoxId должен иметь формат GUID', 'normalizeEtrn', 'operatorReadiness', "schemaVersion:'epd-light/draft-3'"]) {
-  if (!etrn.includes(snippet)) fail(`draft-v3 invariant missing: ${snippet}`)
+for (const snippet of ['FNS_ETRN_REFERENCE', "knd: '1110339'", "formatVersion: '5.01'", 'ON_TRNACLGROT_1_973_01_05_01_02', 'emptyRussianAddress', 'emptyLoadingDetails', 'loadRussianAddress', 'validGuid', 'BoxId должен иметь формат GUID', 'LoadingPartyDetails', 'normalizeEtrn', 'operatorReadiness', "schemaVersion:'epd-light/draft-4'"]) {
+  if (!etrn.includes(snippet)) fail(`draft-v4 invariant missing: ${snippet}`)
 }
 
 const operatorDraft = await readFile(path.join(root, 'src', 'operator-draft.ts'), 'utf8')
-for (const snippet of ['epd-light/operator-candidate-v1', 'draftModelVersion: 3', 'loadingRussianAddress', 'unloadingRussianAddress', 'не является XML ФНС', 'unresolvedByDesign']) {
+for (const snippet of ['epd-light/operator-candidate-v1', 'draftModelVersion: 4', 'loadingRussianAddress', 'unloadingRussianAddress', 'loadingDetails:', 'не является XML ФНС', 'unresolvedByDesign']) {
   if (!operatorDraft.includes(snippet)) fail(`operator draft invariant missing: ${snippet}`)
 }
 
@@ -80,15 +84,21 @@ const gateway = await readFile(path.join(root, 'server', 'index.mjs'), 'utf8')
 for (const snippet of ["url.pathname === '/api/operator/capabilities'", "url.pathname === '/api/operator/preflight'", "url.pathname === '/api/operator/kontur/userdata-preview'", "url.pathname === '/api/operator/send'", 'externalSendEnabled: false', 'externalCallMade: false', "error: 'operator_send_disabled'"]) {
   if (!gateway.includes(snippet)) fail(`gateway fail-closed invariant missing: ${snippet}`)
 }
+if (gateway.includes('/api/operator/kontur/generate-title')) fail('GenerateTitleXml must not be exposed as an unauthenticated gateway route')
 
 const konturProvider = await readFile(path.join(root, 'server', 'providers', 'kontur.mjs'), 'utf8')
-for (const snippet of ["documentTypeNamedId: 'LogisticsWaybill'", "documentFunction: 'reception'", "documentVersion: 'kl_trn_mt_05_01'", 'userDataPreviewWiredToGateway: true', 'generateTitleWiredToGateway: false', 'sendWiredToGateway: false']) {
+for (const snippet of ["documentTypeNamedId: 'LogisticsWaybill'", "documentFunction: 'reception'", "documentVersion: 'kl_trn_mt_05_01'", 'userDataPreviewWiredToGateway: true', 'generateTitleBoundaryReady: true', 'generateTitleWiredToGateway: false', 'postMessageImplemented: false', 'sendWiredToGateway: false']) {
   if (!konturProvider.includes(snippet)) fail(`Kontur provider invariant missing: ${snippet}`)
 }
 
 const konturUserData = await readFile(path.join(root, 'server', 'providers', 'kontur-userdata.mjs'), 'utf8')
-for (const snippet of ['validateKonturT1Candidate', 'buildKonturT1UserDataXml', '<LogisticsWaybillConsignorTitle', '<OrganizationReference', '<DeliveryAddres>', 'ContainerType', 'Ownership', 'WeighingMethod', 'EnablingTimeZone="0"', 'LoadingPartyDetails', 'xsdValidated: false']) {
+for (const snippet of ['validateKonturT1Candidate', 'buildKonturT1UserDataXml', '<LogisticsWaybillConsignorTitle', '<OrganizationReference', '<DeliveryAddres>', 'ContainerType', 'Ownership', 'WeighingMethod', 'EnablingTimeZone="0"', 'LoadingPartyDetails', 'LoadingOwnerDetails', 'xsdValidated: false']) {
   if (!konturUserData.includes(snippet)) fail(`Kontur UserData preview invariant missing: ${snippet}`)
+}
+
+const generationBoundary = await readFile(path.join(root, 'server', 'services', 'kontur-title.mjs'), 'utf8')
+for (const snippet of ['generateKonturT1FromCandidate', 'generateKonturT1Xml', 'gatewayRouteExposed: false', 'callsPostMessage: false', 'signed: false', 'sent: false']) {
+  if (!generationBoundary.includes(snippet)) fail(`Kontur generation boundary invariant missing: ${snippet}`)
 }
 
 const compose = await readFile(path.join(root, 'docker-compose.yml'), 'utf8')
@@ -97,14 +107,14 @@ const nginxCompose = await readFile(path.join(root, 'deploy', 'nginx-compose.con
 if (!nginxCompose.includes('proxy_pass http://gateway:8787')) fail('nginx does not proxy /api to private gateway')
 
 const main = await readFile(path.join(root, 'src', 'main.tsx'), 'utf8')
-if (!main.includes("import './v2.css'")) fail('draft-v3 responsive CSS is not loaded')
+if (!main.includes("import './v2.css'")) fail('draft-v4 responsive CSS is not loaded')
 
 const schemaCheck = await readFile(path.join(root, 'scripts', 'check-fns-schema.mjs'), 'utf8')
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-for (const script of ['build','prebuild','preflight','gateway:test','kontur:provider:test','kontur:userdata:test','fns:schema:check']) {
+for (const script of ['build','prebuild','preflight','gateway:test','kontur:provider:test','kontur:userdata:test','kontur:generation:test','fns:schema:check']) {
   if (!pkg.scripts?.[script]) fail(`required package script missing: ${script}`)
 }
 
-console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, T1 directories, draft-v3, Kontur UserData preview and fail-closed operator checks passed`)
+console.log(`Preflight OK: ${parts.length} source parts, ${app.length} app bytes, RLS, T1 directories, draft-v4, Kontur UserData/GenerateTitle boundaries and fail-closed operator checks passed`)
