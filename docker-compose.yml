@@ -21,6 +21,9 @@ services:
       context: ./server
     environment:
       PORT: "8787"
+      EPD_RELEASE: ${EPD_RELEASE:-0.1.0}
+      EPD_BUILD_COMMIT: ${EPD_BUILD_COMMIT:-}
+      EPD_BUILD_TIME: ${EPD_BUILD_TIME:-}
       EPD_DEPLOYMENT_MODE: ${EPD_DEPLOYMENT_MODE:-local}
       EPD_OPERATOR_PROVIDER: ${EPD_OPERATOR_PROVIDER:-none}
       EPD_OPERATOR_MODE: ${EPD_OPERATOR_MODE:-disabled}
