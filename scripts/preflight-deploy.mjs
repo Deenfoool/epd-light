@@ -54,12 +54,17 @@ const serverDay = await read('deploy', 'server-day.sh')
 requireAll('server-day.sh', serverDay, [
   'scripts/check-deployment-env.mjs',
   'scripts/preflight-runtime.mjs',
+  'scripts/test-readiness.mjs',
   'scripts/test-web-security.mjs',
   'scripts/test-operator-attempt-repository.mjs',
   'scripts/test-operator-attempt-client.mjs',
   'scripts/test-idempotency.mjs',
   'scripts/test-billing-foundation.mjs',
   'persistentAttemptJournal',
+  '/api/system/readiness',
+  '"productionBaselineReady":true',
+  '"legalReadinessClaimed":false',
+  '"sensitiveValuesIncluded":false',
   'Content-Security-Policy:',
   'docker compose --env-file',
   'externalSendEnabled',
@@ -122,6 +127,16 @@ requireAll('gateway writer migration', writerMigration, [
 ])
 if (/create\s+role\s+epd_gateway_writer\s+login/i.test(writerMigration)) fail('gateway capability role must remain NOLOGIN')
 
+const readiness = await read('server', 'readiness.mjs')
+requireAll('technical readiness', readiness, [
+  'technicalReadinessOnly: true',
+  'legalReadinessClaimed: false',
+  'productionBaselineReady: Object.values(checks).every(Boolean)',
+  'sensitiveValuesIncluded: false',
+  'operatorProductionSendDisabled: true',
+  'billingFailClosed',
+])
+
 const envExample = await read('.env.example')
 requireAll('.env.example', envExample, [
   'EPD_DEPLOYMENT_MODE=local',
@@ -141,7 +156,7 @@ requireAll('.env.example', envExample, [
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test', 'web-security:test']) {
+for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test', 'readiness:test', 'web-security:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 if (pkg.dependencies?.pg !== '8.23.0') fail('root pg dependency must stay pinned to 8.23.0')
@@ -153,4 +168,4 @@ for (const [section, dependencies] of Object.entries({ dependencies: pkg.depende
   }
 }
 
-console.log('Deploy preflight OK: explicit production mode, CSP/header inheritance, safe operator journal UI boundary, guarded checksum migrations, billing rollout, restricted persistent journal, loopback binding, private gateway, HTTPS edge and encrypted recovery safeguards verified')
+console.log('Deploy preflight OK: production readiness endpoint, explicit production mode, CSP/header inheritance, safe journals, guarded migrations, billing fail-closed, loopback binding, HTTPS edge and encrypted recovery safeguards verified')
