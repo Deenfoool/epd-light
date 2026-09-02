@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 const assert = (condition, message) => { if (!condition) throw new Error(message) }
 const base = {
   PATH: process.env.PATH || '',
+  EPD_DEPLOYMENT_MODE: 'production',
   VITE_SUPABASE_URL: 'https://db.example.ru',
   VITE_SUPABASE_ANON_KEY: 'public-anon-key',
   EPD_GATEWAY_AUTH_MODE: 'supabase',
@@ -33,8 +34,14 @@ const run = (overrides = {}) => spawnSync(process.execPath, ['scripts/check-depl
 const good = run()
 assert(good.status === 0, `safe production env must pass: ${good.stderr}`)
 assert(good.stdout.includes('Deployment environment check OK'), 'success output missing')
+assert(good.stdout.includes('deployment mode: production'), 'production deployment mode output missing')
 assert(good.stdout.includes('encrypted database backups: configured'), 'backup readiness output missing')
 assert(good.stdout.includes('persistent operator journal: not configured'), 'optional journal status output missing')
+
+const localMode = run({ EPD_DEPLOYMENT_MODE: 'local' })
+assert(localMode.status !== 0 && localMode.stderr.includes('EPD_DEPLOYMENT_MODE must be production'), 'production checker must reject local deployment mode')
+const missingMode = run({ EPD_DEPLOYMENT_MODE: '' })
+assert(missingMode.status !== 0 && missingMode.stderr.includes('EPD_DEPLOYMENT_MODE is required'), 'production checker must require deployment mode')
 
 const badAuth = run({ EPD_GATEWAY_AUTH_MODE: 'disabled' })
 assert(badAuth.status !== 0 && badAuth.stderr.includes('must be supabase'), 'production auth disabled must fail')
@@ -101,4 +108,4 @@ const sandboxPersistent = run({
 assert(sandboxPersistent.status === 0, `sandbox with restricted persistent journal must pass: ${sandboxPersistent.stderr}`)
 assert(!sandboxPersistent.stdout.includes('dedupe will not survive gateway restart'), 'persistent sandbox should not emit restart-dedupe warning')
 
-console.log('Deployment env test OK: auth/CORS/VITE secrets/rate limits, encrypted backups, restricted journal DB, restore isolation and sandbox credentials verified')
+console.log('Deployment env test OK: production mode/auth/CORS/VITE secrets/rate limits, encrypted backups, restricted journal DB, restore isolation and sandbox credentials verified')
