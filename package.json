@@ -20,6 +20,7 @@
     "attempt-client:test": "node scripts/test-operator-attempt-client.mjs",
     "idempotency:test": "node scripts/test-idempotency.mjs",
     "billing:test": "node scripts/test-billing-foundation.mjs",
+    "web-security:test": "node scripts/test-web-security.mjs",
     "rate-limit:test": "node scripts/test-rate-limit.mjs",
     "gateway:test": "node scripts/test-gateway.mjs",
     "gateway:auth:test": "node scripts/test-gateway-auth.mjs",
