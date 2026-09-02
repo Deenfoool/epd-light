@@ -41,6 +41,7 @@ export async function checkRuntimeDependencies({
   if (!repositoryStatus.configured) throw dependencyError('data_api_not_configured')
 
   const signal = AbortSignal.timeout(Math.max(1_000, Number(timeoutMs || 5_000)))
+  // authConfig.jwksUrl resolves to /auth/v1/.well-known/jwks.json for Supabase Auth.
   const jwks = await fetchJson(authConfig.jwksUrl, {
     method: 'GET',
     headers: { accept: 'application/json' },
