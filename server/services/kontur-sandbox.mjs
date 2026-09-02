@@ -5,6 +5,7 @@ import { createSupabaseOwnedCandidateLoader } from '../repositories/supabase-doc
 import { generateKonturT1FromCandidate } from './kontur-title.mjs'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const SAFE_CODE_RE = /^[a-z0-9_]{1,64}$/
 
 export function validateSandboxGenerateRequest(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -21,6 +22,29 @@ export function validateSandboxGenerateRequest(input) {
   return { ok: true, documentId }
 }
 
+const safeFailureCode = (error) => {
+  const code = String(error?.code || '')
+  return SAFE_CODE_RE.test(code) ? code : 'sandbox_generation_failed'
+}
+
+const journalConflict = (claim) => {
+  if (claim.state === 'already_succeeded') {
+    const error = new Error('This document revision already has a successful sandbox GenerateTitleXml attempt')
+    error.code = 'sandbox_already_generated'
+    error.statusCode = 409
+    error.attemptId = claim.attempt?.id
+    return error
+  }
+  if (claim.state === 'in_progress') {
+    const error = new Error('This document revision already has an in-progress sandbox GenerateTitleXml attempt')
+    error.code = 'sandbox_generation_in_progress'
+    error.statusCode = 409
+    error.attemptId = claim.attempt?.id
+    return error
+  }
+  return null
+}
+
 /**
  * Sandbox-only external boundary.
  * The browser supplies only documentId. The canonical document is reloaded through
@@ -34,6 +58,7 @@ export async function generateKonturSandboxTitleForDocument({
   repositoryFetchImpl = fetch,
   konturFetchImpl = fetch,
   konturBaseUrl,
+  attemptRepository = null,
 }) {
   if (auth?.mode !== 'supabase' || !String(auth?.subject || '').trim() || !String(auth?.accessToken || '').trim()) {
     const error = new Error('Verified Supabase user context is required for sandbox generation')
@@ -65,23 +90,75 @@ export async function generateKonturSandboxTitleForDocument({
     titleIndex: KONTUR_T1_CONTRACT.titleIndex,
   })
 
-  const execution = await runInFlightOnce(identity, () => generateKonturT1FromCandidate({
-    candidate: authorization.candidate,
-    config: konturConfig,
-    fetchImpl: konturFetchImpl,
-    ...(konturBaseUrl ? { baseUrl: konturBaseUrl } : {}),
-  }))
+  const persistentConfigured = Boolean(attemptRepository?.status?.configured)
+  const execution = await runInFlightOnce(identity, async () => {
+    let claim = null
+    if (persistentConfigured) {
+      claim = await attemptRepository.claim({
+        userId: auth.subject,
+        documentId,
+        identity,
+      })
+      const conflict = journalConflict(claim)
+      if (conflict) throw conflict
+    }
+
+    try {
+      const generation = await generateKonturT1FromCandidate({
+        candidate: authorization.candidate,
+        config: konturConfig,
+        fetchImpl: konturFetchImpl,
+        ...(konturBaseUrl ? { baseUrl: konturBaseUrl } : {}),
+      })
+      let persistedAttempt = claim?.attempt || null
+      if (persistentConfigured && persistedAttempt?.id) {
+        try {
+          persistedAttempt = await attemptRepository.succeed(persistedAttempt.id)
+        } catch (journalError) {
+          const error = new Error('GenerateTitleXml succeeded but persistent attempt journal could not be marked succeeded')
+          error.code = 'operator_attempt_journal_update_failed'
+          error.statusCode = 503
+          error.cause = journalError
+          throw error
+        }
+      }
+      return {
+        generation,
+        persistence: {
+          configured: persistentConfigured,
+          persisted: Boolean(persistedAttempt?.id),
+          attemptId: persistedAttempt?.id || '',
+          status: persistedAttempt?.status || '',
+        },
+      }
+    } catch (error) {
+      if (persistentConfigured && claim?.attempt?.id && error?.code !== 'operator_attempt_journal_update_failed') {
+        try {
+          await attemptRepository.fail(claim.attempt.id, safeFailureCode(error))
+        } catch (journalError) {
+          const wrapped = new Error('Sandbox call failed and persistent attempt journal could not record failure')
+          wrapped.code = 'operator_attempt_journal_update_failed'
+          wrapped.statusCode = 503
+          wrapped.cause = journalError
+          throw wrapped
+        }
+      }
+      throw error
+    }
+  })
 
   return {
-    ...execution.result,
+    ...execution.result.generation,
     externalCallMade: !execution.sharedInFlight,
     externalResultShared: execution.sharedInFlight,
+    persistence: execution.result.persistence,
     idempotency: {
       idempotencyKey: identity.idempotencyKey,
       requestFingerprint: identity.requestFingerprint,
       sourceRevision: identity.sourceRevision,
       sharedInFlight: execution.sharedInFlight,
-      completedPersistenceWired: false,
+      completedPersistenceWired: persistentConfigured,
+      attemptId: execution.result.persistence?.attemptId || '',
     },
   }
 }
@@ -97,7 +174,8 @@ export const KONTUR_SANDBOX_GENERATION_POLICY = Object.freeze({
   supabaseRlsReloadRequired: true,
   concurrentDuplicateExternalCallsCollapsed: true,
   completedAttemptPersistenceTableReady: true,
-  completedAttemptPersistenceWired: false,
+  completedAttemptPersistenceOptional: true,
+  persistentDuplicateExternalCallsBlockedWhenConfigured: true,
   callsGenerateTitleXml: true,
   callsPostMessage: false,
   signsDocument: false,
