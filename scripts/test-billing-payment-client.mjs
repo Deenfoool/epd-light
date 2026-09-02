@@ -50,11 +50,18 @@ for (const required of [
   'История платежных событий',
   'listBillingPaymentEvents(20)',
   'billingPaymentEventStatusLabel',
+  "fetch('/api/billing/capabilities'",
+  'Платёжный backend',
+  "billingCaps.provider==='none'",
+  'billingCaps.checkoutEnabled===false',
+  'billingCaps.webhookEnabled===false',
+  'billingCaps.realMoneyEnabled===false',
+  'Прямая активация подписки runtime-ролью',
   'данные карты',
   'Success redirect никогда не считается доказательством оплаты',
-]) assert(app.includes(required), `billing UI missing payment history invariant: ${required}`)
+]) assert(app.includes(required), `billing UI missing payment/backend invariant: ${required}`)
 
 assert(!app.includes('provider_event_id'), 'billing UI must not render provider event id')
 assert(!app.includes('payload_sha256'), 'billing UI must not render payload hash')
 
-console.log('Billing payment client test OK: RLS + column privileges expose only safe own-event metadata and browser cannot write payment state')
+console.log('Billing payment client test OK: RLS + column privileges expose only safe own-event metadata and UI confirms fail-closed payment backend')
