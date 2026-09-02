@@ -48,6 +48,7 @@ jobs:
           node --check scripts/test-operator-attempt-client.mjs
           node --check scripts/test-idempotency.mjs
           node --check scripts/test-billing-foundation.mjs
+          node --check scripts/test-web-security.mjs
           node --check scripts/test-rate-limit.mjs
           node --check scripts/test-gateway.mjs
           node --check scripts/test-gateway-auth.mjs
@@ -64,6 +65,8 @@ jobs:
         run: npm run preflight
       - name: Deployment env policy
         run: npm run deploy:env:test
+      - name: Web security headers
+        run: npm run web-security:test
       - name: Privacy-safe audit
         run: npm run audit:test
       - name: External document authorization policy
