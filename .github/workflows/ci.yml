@@ -43,6 +43,7 @@ jobs:
           node --check scripts/test-authorization.mjs
           node --check scripts/test-supabase-repository.mjs
           node --check scripts/test-idempotency.mjs
+          node --check scripts/test-billing-foundation.mjs
           node --check scripts/test-rate-limit.mjs
           node --check scripts/test-gateway.mjs
           node --check scripts/test-gateway-auth.mjs
@@ -67,6 +68,8 @@ jobs:
         run: npm run repository:test
       - name: Operator idempotency
         run: npm run idempotency:test
+      - name: Billing foundation
+        run: npm run billing:test
       - name: Rate limiter unit test
         run: npm run rate-limit:test
       - name: Gateway smoke test (local auth disabled)
