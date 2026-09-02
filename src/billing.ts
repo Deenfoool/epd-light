@@ -18,14 +18,19 @@ const demoState = (): BillingState => ({
   usage: null,
 })
 
+export function currentBillingPeriodStart(now = new Date()): string {
+  return `${now.toISOString().slice(0, 7)}-01`
+}
+
 export async function getBillingState(): Promise<BillingState> {
   if (!cloudEnabled || !supabase) return demoState()
+  const periodStart = currentBillingPeriodStart()
 
   const [settingsResult, plansResult, subscriptionResult, usageResult] = await Promise.all([
     supabase.from('billing_settings').select('enforcement_enabled,trial_days').eq('id', 'default').maybeSingle(),
     supabase.from('billing_plans').select('code,name,monthly_price_rub,document_limit,active,features,sort_order').order('sort_order'),
     supabase.from('subscriptions').select('user_id,plan_code,status,trial_ends_at,current_period_start,current_period_end,cancel_at_period_end,payment_provider,created_at,updated_at').maybeSingle(),
-    supabase.from('billing_usage_monthly').select('user_id,period_start,documents_created,sandbox_generations,updated_at').order('period_start', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('billing_usage_monthly').select('user_id,period_start,documents_created,sandbox_generations,updated_at').eq('period_start', periodStart).maybeSingle(),
   ])
 
   const firstError = settingsResult.error || plansResult.error || subscriptionResult.error || usageResult.error
