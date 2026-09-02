@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises'
 
 const assert = (condition, message) => { if (!condition) throw new Error(message) }
 const source = await readFile(new URL('../src/billing-events.ts', import.meta.url), 'utf8')
-const app = await readFile(new URL('../src/app-chunks/App.29.part', import.meta.url), 'utf8')
+const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
+const appCompact = app.replace(/\s+/g, '')
 const privileges = await readFile(new URL('../supabase/migrations/202609020005_billing_payment_event_column_privileges.sql', import.meta.url), 'utf8')
 
 for (const required of [
@@ -59,7 +60,7 @@ for (const required of [
   'Прямая активация подписки runtime-ролью',
   'данные карты',
   'Success redirect никогда не считается доказательством оплаты',
-]) assert(app.includes(required), `billing UI missing payment/backend invariant: ${required}`)
+]) assert(appCompact.includes(required.replace(/\s+/g, '')), `billing UI missing payment/backend invariant: ${required}`)
 
 assert(!app.includes('provider_event_id'), 'billing UI must not render provider event id')
 assert(!app.includes('payload_sha256'), 'billing UI must not render payload hash')

@@ -25,9 +25,10 @@ requireAll('server-day source traceability', serverDay, [
   'EPD_RELEASE="$RELEASE"',
   'EPD_BUILD_COMMIT="$BUILD_COMMIT"',
   'EPD_BUILD_TIME="$BUILD_TIME"',
-  '"release":"$RELEASE"',
-  '"commit":"$BUILD_COMMIT"',
 ])
+for (const snippet of [String.raw`\"release\":\"$RELEASE\"`, String.raw`\"commit\":\"$BUILD_COMMIT\"`]) {
+  if (!serverDay.includes(snippet)) fail(`server-day source traceability: missing ${snippet}`)
+}
 for (const forbidden of [
   'BUILD_COMMIT="${EPD_BUILD_COMMIT:-',
   'RELEASE="${EPD_RELEASE:-',

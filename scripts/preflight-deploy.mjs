@@ -10,10 +10,25 @@ const requireAll = (name, text, snippets) => {
 }
 
 const gitignore = await read('.gitignore')
-requireAll('.gitignore', gitignore, ['.env\n', '.env.*', '!.env.example', '.backups', '.epd-light-migration.lock', '*.dump.enc', '*.dump.sha256'])
+requireAll('.gitignore', gitignore, ['.env\n', '.env.*', '!.env.example', '*.tsbuildinfo', '.backups', '.epd-light-migration.lock', '*.dump.enc', '*.dump.sha256'])
 
 const dockerignore = await read('.dockerignore')
-requireAll('.dockerignore', dockerignore, ['.git', '.env', '.env.*', 'node_modules', 'src/App.tsx', '.backups', '.epd-light-migration.lock', '*.dump.enc'])
+requireAll('.dockerignore', dockerignore, ['.git', '.env', '.env.*', 'node_modules', '*.tsbuildinfo', '.backups', '.epd-light-migration.lock', '*.dump.enc'])
+if (dockerignore.includes('src/App.tsx')) fail('.dockerignore must not exclude the tracked SPA entrypoint')
+
+const webDockerfile = await read('Dockerfile')
+requireAll('web Dockerfile', webDockerfile, [
+  'COPY package.json package-lock.json',
+  'npm ci --no-audit --no-fund',
+  'npm run preflight && npm run build',
+])
+
+const gatewayDockerfile = await read('server', 'Dockerfile')
+requireAll('gateway Dockerfile', gatewayDockerfile, [
+  'COPY package.json package-lock.json',
+  'npm ci --omit=dev --no-audit --no-fund',
+  'USER node',
+])
 
 const compose = await read('docker-compose.yml')
 requireAll('docker-compose.yml', compose, [
@@ -213,11 +228,28 @@ requireAll('.env.example', envExample, [
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['deploy:server-day', 'deploy:dependencies:check', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test', 'build-info:test', 'dependency:test', 'readiness:test', 'web-security:test']) {
+const serverPkg = JSON.parse(await read('server', 'package.json'))
+for (const script of ['check', 'syntax:check', 'test', 'format:check', 'deploy:server-day', 'deploy:dependencies:check', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test', 'build-info:test', 'dependency:test', 'readiness:test', 'web-security:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
+const rootLock = JSON.parse(await read('package-lock.json'))
+const gatewayLock = JSON.parse(await read('server', 'package-lock.json'))
+if (rootLock.lockfileVersion !== 3 || rootLock.name !== pkg.name || rootLock.version !== pkg.version) {
+  fail('root package-lock.json is missing or does not match package.json')
+}
+if (gatewayLock.lockfileVersion !== 3 || gatewayLock.name !== serverPkg.name || gatewayLock.version !== serverPkg.version) {
+  fail('server/package-lock.json is missing or does not match server/package.json')
+}
+
+const ci = await read('.github', 'workflows', 'ci.yml')
+requireAll('CI workflow', ci, [
+  'npm ci',
+  'npm run check',
+  'npm audit --omit=dev --audit-level=high',
+  'docker build --tag epd-light-web:ci .',
+  'docker build --tag epd-light-gateway:ci ./server',
+])
 if (pkg.dependencies?.pg !== '8.23.0') fail('root pg dependency must stay pinned to 8.23.0')
-const serverPkg = JSON.parse(await read('server', 'package.json'))
 if (serverPkg.dependencies?.pg !== '8.23.0') fail('gateway pg dependency must stay pinned to 8.23.0')
 for (const [section, dependencies] of Object.entries({ dependencies: pkg.dependencies || {}, devDependencies: pkg.devDependencies || {} })) {
   for (const [name, version] of Object.entries(dependencies)) {

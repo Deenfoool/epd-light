@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises'
 const read = (path) => readFile(path, 'utf8')
 const fail = (message) => { console.error(`RUNTIME PRECHECK FAILED: ${message}`); process.exit(1) }
 const requireAll = (name, text, snippets) => {
-  for (const snippet of snippets) if (!text.includes(snippet)) fail(`${name}: missing invariant: ${snippet}`)
+  const normalized = text.replace(/\s+/g, ' ')
+  for (const snippet of snippets) if (!normalized.includes(snippet.replace(/\s+/g, ' '))) fail(`${name}: missing invariant: ${snippet}`)
 }
 
 const auth = await read('server/auth.mjs')
@@ -44,7 +45,7 @@ for (const forbidden of ['.insert(', '.update(', '.upsert(', '.delete(', 'genera
   if (attemptClient.includes(forbidden)) fail(`operator attempt browser client contains forbidden write/payload pattern: ${forbidden}`)
 }
 
-const documentView = await read('src/app-chunks/App.22.part')
+const documentView = await read('src/App.tsx')
 requireAll('operator attempt history UI', documentView, [
   'История действий оператора',
   'listOperatorAttempts(doc.id)',

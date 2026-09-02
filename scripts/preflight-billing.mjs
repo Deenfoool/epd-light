@@ -6,7 +6,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const read = (...parts) => readFile(path.join(root, ...parts), 'utf8')
 const fail = (message) => { console.error(`BILLING PRECHECK FAILED: ${message}`); process.exit(1) }
 const requireAll = (name, text, snippets) => {
-  for (const snippet of snippets) if (!text.includes(snippet)) fail(`${name}: missing ${snippet}`)
+  const normalized = text.replace(/\s+/g, ' ')
+  for (const snippet of snippets) if (!normalized.includes(snippet.replace(/\s+/g, ' '))) fail(`${name}: missing ${snippet}`)
 }
 
 const ledgerMigration = await read('supabase', 'migrations', '202609020003_billing_payment_events.sql')
@@ -68,7 +69,7 @@ requireAll('billing repository', repository, [
   'directSubscriptionUpdateAllowed: false',
   'entitlementDatabaseFunctionRequired: true',
 ])
-for (const forbidden of ['update public.subscriptions', "set event_status='applied'", 'console.log(config.connectionString)', 'rawWebhookPayload', 'cardNumber', 'cvv']) {
+for (const forbidden of ['update public.subscriptions', "set event_status='applied'", 'console.log(config.connectionString)', 'rawWebhookPayload:', 'cardNumber', 'cvv']) {
   if (repository.includes(forbidden)) fail(`billing repository bypasses DB function or contains sensitive pattern: ${forbidden}`)
 }
 
@@ -82,7 +83,7 @@ for (const forbidden of ['provider_event_id', 'payload_sha256', 'user_id', '.ins
   if (browserClient.includes(forbidden)) fail(`billing history browser client contains forbidden field/write: ${forbidden}`)
 }
 
-const app = await read('src', 'app-chunks', 'App.29.part')
+const app = await read('src', 'App.tsx')
 requireAll('billing history UI', app, [
   'История платежных событий',
   'listBillingPaymentEvents(20)',

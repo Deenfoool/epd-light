@@ -1,5 +1,7 @@
 # ЭПД Лайт
 
+[![CI](https://github.com/Deenfoool/epd-light/actions/workflows/ci.yml/badge.svg)](https://github.com/Deenfoool/epd-light/actions/workflows/ci.yml)
+
 MVP SaaS для подготовки, проверки и хранения **черновиков электронной транспортной накладной (ЭТрН)** для малого и среднего бизнеса.
 
 > **Важно:** ЭПД Лайт не является оператором ИС ЭПД. Production-отправка, подписание и `PostMessage` не реализованы. Sandbox `GenerateTitleXml` не означает, что документ подписан, отправлен или зарегистрирован в ГИС ЭПД.
@@ -84,8 +86,8 @@ Self-service JSON export `epd-light/account-data-export-v1` собирается
 ## Быстрый local запуск
 
 ```bash
-npm install
-npm run preflight
+npm ci
+npm run check
 npm run dev
 ```
 
@@ -258,6 +260,7 @@ npm run build
 - [`docs/BACKUP-RECOVERY.md`](docs/BACKUP-RECOVERY.md)
 - [`docs/PRIVACY-DATA-LIFECYCLE.md`](docs/PRIVACY-DATA-LIFECYCLE.md)
 - [`docs/FNS-ETRN-MAPPING.md`](docs/FNS-ETRN-MAPPING.md)
+- [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md)
 
 ## Официальные ссылки
 
@@ -269,4 +272,4 @@ npm run build
 
 ## SPA source
 
-Основной SPA временно хранится в `src/app-chunks/App.*.part`. `predev/prebuild` собирает их в игнорируемый `src/App.tsx`.
+Основной SPA хранится в отслеживаемом `src/App.tsx`. Перед выпуском `npm run check` выполняет preflight-проверки, все тестовые группы, проверку форматирования и production-сборку.

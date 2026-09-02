@@ -70,10 +70,12 @@ docker run --rm \
   "$POSTGRES_IMAGE" \
   sh -eu -c 'pg_restore --clean --if-exists --no-owner --no-acl --exit-on-error --dbname="$EPD_RESTORE_TEST_DATABASE_URL" "/backup/'"$TMP_BASENAME"'"'
 
+RESTORE_CHECK_SQL="select (to_regclass('public.documents') is not null and to_regclass('public.profiles') is not null)::text"
 CHECK="$(docker run --rm \
   -e EPD_RESTORE_TEST_DATABASE_URL="$TEST_URL" \
+  -e EPD_RESTORE_CHECK_SQL="$RESTORE_CHECK_SQL" \
   "$POSTGRES_IMAGE" \
-  sh -eu -c 'psql "$EPD_RESTORE_TEST_DATABASE_URL" -Atqc "select (to_regclass('"'"'public.documents'"'"') is not null and to_regclass('"'"'public.profiles'"'"') is not null)::text"')"
+  sh -eu -c 'psql "$EPD_RESTORE_TEST_DATABASE_URL" -Atqc "$EPD_RESTORE_CHECK_SQL"')"
 
 if [ "$CHECK" != "true" ]; then
   echo "ERROR: restore completed but required EPD Light tables are missing" >&2

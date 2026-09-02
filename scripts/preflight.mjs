@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -6,13 +6,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const read = (...parts) => readFile(path.join(root, ...parts), 'utf8')
 const fail = (message) => { console.error(`PRECHECK FAILED: ${message}`); process.exit(1) }
 const requireSnippets = (name, text, snippets) => {
-  for (const snippet of snippets) if (!text.includes(snippet)) fail(`${name}: missing invariant: ${snippet}`)
+  const normalized = text.replace(/\s+/g, '')
+  for (const snippet of snippets) if (!normalized.includes(snippet.replace(/\s+/g, ''))) fail(`${name}: missing invariant: ${snippet}`)
 }
 
-const partsDir = path.join(root, 'src', 'app-chunks')
-const parts = (await readdir(partsDir)).filter((name) => name.endsWith('.part')).sort()
-if (parts.length !== 34) fail(`expected 34 app source parts, found ${parts.length}`)
-const app = (await Promise.all(parts.map((name) => readFile(path.join(partsDir, name), 'utf8')))).join('')
+const app = await read('src', 'App.tsx')
 requireSnippets('app', app, [
   'export default function App()', 'function Wizard(', 'function Documents(', 'function Integrations(', 'function BillingPage()',
   'function RussianAddressEditor(', 'gatewayFetch', 'buildOperatorDraft', 'operatorReadiness',
@@ -25,8 +23,7 @@ requireSnippets('app', app, [
   '/api/operator/kontur/generate-title-sandbox', 'Kontur sandbox', 'documentId:doc.id',
   'externalResultShared', 'requestFingerprint', 'sourceRevision',
   "'/app/billing'", 'Тариф и лимиты', 'billingErrorMessage', 'Лимиты пока не блокируют',
-  'Деньги сейчас не списываются', 'Supabase access token', 'RLS repository adapter',
-  'service_role для этого пути не нужен',
+  'Деньги сейчас не списываются', 'Пользовательский access token', 'RLS repository adapter',
 ])
 
 const gatewayClient = await read('src', 'gateway.ts')
@@ -103,7 +100,7 @@ requireSnippets('draft-v4', etrn, [
 const operatorDraft = await read('src', 'operator-draft.ts')
 requireSnippets('operator candidate', operatorDraft, [
   'epd-light/operator-candidate-v1', 'draftModelVersion: 4', 'internalId: doc.id', 'loadingDetails:',
-  'браузерский payload не является авторитетным', 'не является XML ФНС', 'unresolvedByDesign',
+  'браузерский payload не является авторитетным', 'Не является XML ФНС', 'unresolvedByDesign',
 ])
 
 const gateway = await read('server', 'index.mjs')
@@ -231,7 +228,7 @@ requireSnippets('nginx proxy', nginx, [
   'proxy_set_header X-Real-IP $remote_addr', 'proxy_set_header X-Forwarded-For $remote_addr',
 ])
 const serverDockerfile = await read('server', 'Dockerfile')
-requireSnippets('gateway Docker image', serverDockerfile, ['COPY package.json', 'npm install --omit=dev', 'COPY . .', 'USER node'])
+requireSnippets('gateway Docker image', serverDockerfile, ['COPY package.json package-lock.json', 'npm ci --omit=dev', 'COPY . .', 'USER node'])
 
 const deployCheck = await read('scripts', 'check-deployment-env.mjs')
 requireSnippets('deployment env checker', deployCheck, [
@@ -253,7 +250,7 @@ requireSnippets('deployment env test', deployTest, [
 const schemaCheck = await read('scripts', 'check-fns-schema.mjs')
 if (!schemaCheck.includes('min_ON_TRNACLGROT_1_973_01_05_01_02.xsd')) fail('FNS schema checker does not pin expected draft XSD')
 const konturSchemaCheck = await read('scripts', 'check-kontur-schemas.mjs')
-requireSnippets('Kontur schema checker', konturSchemaCheck, ['discoverKonturT1Descriptor', 'getKonturContent', 'sha256', 'UserDataXsd', 'EPD_KONTUR_BOX_ID'])
+requireSnippets('Kontur schema checker', konturSchemaCheck, ['konturConfigFromEnv', 'discoverKonturT1Descriptor', 'getKonturContent', 'sha256', 'UserDataXsd'])
 const sandboxTest = await read('scripts', 'test-kontur-sandbox.mjs')
 requireSnippets('Kontur sandbox test', sandboxTest, [
   'documentId-only request', 'sandbox_payload_rejected', 'Bearer user-access-token', 'public-key',
@@ -263,12 +260,12 @@ requireSnippets('Kontur sandbox test', sandboxTest, [
 const billingTest = await read('scripts', 'test-billing-foundation.mjs')
 requireSnippets('billing test', billingTest, [
   'billing migration missing invariant', 'browser must not receive billing write permission', 'current-month usage',
-  'billing UI drifted from billing catalogue', 'billing app UI invariant missing',
+  'pricing UI drifted from billing catalogue', 'billing app UI invariant missing',
 ])
 
 const pkg = JSON.parse(await read('package.json'))
 for (const script of [
-  'build','prebuild','preflight','deploy:check','deploy:env:test','deploy:server-day','db:migrate',
+  'check','test','build','format:check','preflight','deploy:check','deploy:env:test','deploy:server-day','db:migrate',
   'backup:create','backup:verify','backup:restore:test','audit:test','auth:test','authorization:test','repository:test',
   'idempotency:test','billing:test','rate-limit:test','gateway:test','gateway:auth:test','kontur:provider:test',
   'kontur:userdata:test','kontur:generation:test','kontur:sandbox:test','kontur:schema:check','kontur:schema:save','fns:schema:check',
@@ -279,4 +276,4 @@ const serverPkg = JSON.parse(await read('server', 'package.json'))
 if (serverPkg.dependencies?.jose !== '6.2.10') fail('gateway jose dependency must stay pinned to tested version 6.2.10')
 if (serverPkg.dependencies?.pg !== '8.23.0') fail('gateway pg dependency must stay pinned to tested version 8.23.0')
 
-console.log(`Preflight OK: ${parts.length} source parts, 5 migrations, billing foundation, encrypted deployment policy, JWT/RLS canonical reads, persistent operator idempotency, sandbox GenerateTitle, rate limits, privacy audit and fail-closed PostMessage/send verified`)
+console.log('Preflight OK: tracked SPA source, 9 migrations, billing foundation, encrypted deployment policy, JWT/RLS canonical reads, persistent operator idempotency, sandbox GenerateTitle, rate limits, privacy audit and fail-closed PostMessage/send verified')

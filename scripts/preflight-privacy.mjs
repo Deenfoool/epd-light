@@ -6,7 +6,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const read = (...parts) => readFile(path.join(root, ...parts), 'utf8')
 const fail = (message) => { console.error(`PRIVACY PRECHECK FAILED: ${message}`); process.exit(1) }
 const requireAll = (name, text, snippets) => {
-  for (const snippet of snippets) if (!text.includes(snippet)) fail(`${name}: missing ${snippet}`)
+  const normalized = text.replace(/\s+/g, ' ')
+  for (const snippet of snippets) if (!normalized.includes(snippet.replace(/\s+/g, ' '))) fail(`${name}: missing ${snippet}`)
 }
 
 const migration = await read('supabase', 'migrations', '202609020006_account_deletion_requests.sql')
@@ -51,9 +52,9 @@ for (const forbidden of [
   if (client.includes(forbidden)) fail(`privacy client contains forbidden secret/write/broad-select pattern: ${forbidden}`)
 }
 
-const nav = await read('src', 'app-chunks', 'App.09.part')
+const nav = await read('src', 'App.tsx')
 requireAll('privacy navigation', nav, ["'/app/privacy'", 'Данные и удаление'])
-const page = await read('src', 'app-chunks', 'App.30.part')
+const page = nav
 requireAll('privacy UI', page, [
   'function PrivacyPage()',
   'Экспорт моих данных',
@@ -61,8 +62,8 @@ requireAll('privacy UI', page, [
   'Это не мгновенное удаление',
   'Browser не получает права удалять auth user или server-owned журналы',
 ])
-const routes = await read('src', 'app-chunks', 'App.34.part')
-requireAll('privacy route', routes, ["pathname==='/app/privacy'", '<PrivacyPage/>'])
+const routes = nav
+requireAll('privacy route', routes, ["pathname === '/app/privacy'", '<PrivacyPage />'])
 
 const pkg = JSON.parse(await read('package.json'))
 if (!pkg.scripts?.['privacy:test']) fail('package script privacy:test missing')
