@@ -39,6 +39,8 @@ export function billingEventRepositoryStatus(config = billingEventRepositoryConf
     cardDataStored: false,
     secretsStored: false,
     verifiedEventRequiredForEntitlement: true,
+    directSubscriptionUpdateAllowed: false,
+    entitlementDatabaseFunctionRequired: true,
   }
 }
 
@@ -165,54 +167,49 @@ export function createBillingEventRepository(config = billingEventRepositoryConf
       }
 
       return withBillingTransaction(config, async (client) => {
-        const eventResult = await client.query(`
+        const existingResult = await client.query(`
           select * from public.billing_payment_events
           where id=$1 and user_id=$2
-          for update
+          limit 1
         `, [eventId, entitlement.userId])
-        const billingEvent = eventShape(eventResult.rows[0])
-        if (!billingEvent) throw Object.assign(new Error('Billing event not found'), { code: 'billing_event_not_found' })
-        if (billingEvent.eventStatus === 'applied') return { state: 'already_applied', event: billingEvent }
-        if (billingEvent.eventStatus !== 'verified') throw Object.assign(new Error('Billing event is not verified'), { code: 'billing_event_not_verified' })
-        if (billingEvent.planCode !== entitlement.planCode) throw Object.assign(new Error('Billing event plan mismatch'), { code: 'billing_event_plan_mismatch' })
+        const existing = eventShape(existingResult.rows[0])
+        if (!existing) throw Object.assign(new Error('Billing event not found'), { code: 'billing_event_not_found' })
+        if (existing.eventStatus === 'applied') return { state: 'already_applied', event: existing }
+        if (existing.eventStatus !== 'verified') throw Object.assign(new Error('Billing event is not verified'), { code: 'billing_event_not_verified' })
+        if (existing.planCode !== entitlement.planCode) throw Object.assign(new Error('Billing event plan mismatch'), { code: 'billing_event_plan_mismatch' })
 
-        const subscription = await client.query(`
-          update public.subscriptions
-          set plan_code=$2,
-              status='active',
-              trial_ends_at=null,
-              current_period_start=$3::date,
-              current_period_end=$4::date,
-              cancel_at_period_end=false,
-              payment_provider=$5,
-              provider_customer_id=$6,
-              provider_subscription_id=$7,
-              updated_at=now()
-          where user_id=$1
-          returning user_id, plan_code, status, current_period_start, current_period_end, payment_provider
+        const appliedResult = await client.query(`
+          select *
+          from public.apply_verified_billing_entitlement(
+            $1::uuid, $2::uuid, $3::text, $4::date, $5::date, $6::text, $7::text
+          )
         `, [
+          eventId,
           entitlement.userId,
           entitlement.planCode,
           periodStart,
           periodEnd,
-          billingEvent.provider,
           String(entitlement.providerCustomerId || ''),
           String(entitlement.providerSubscriptionId || ''),
         ])
-        if (subscription.rowCount !== 1) throw Object.assign(new Error('Subscription entitlement not found'), { code: 'billing_subscription_not_found' })
+        if (appliedResult.rowCount !== 1) throw Object.assign(new Error('Billing entitlement function returned no row'), { code: 'billing_entitlement_apply_failed' })
 
-        const applied = await client.query(`
-          update public.billing_payment_events
-          set event_status='applied', processed_at=now(), safe_error_code='', updated_at=now()
-          where id=$1 and event_status='verified'
-          returning *
-        `, [eventId])
-        if (applied.rowCount !== 1) throw Object.assign(new Error('Billing event apply race'), { code: 'billing_event_apply_race' })
+        const eventResult = await client.query('select * from public.billing_payment_events where id=$1 limit 1', [eventId])
+        const appliedEvent = eventShape(eventResult.rows[0])
+        if (!appliedEvent || appliedEvent.eventStatus !== 'applied') throw Object.assign(new Error('Billing event was not marked applied'), { code: 'billing_event_apply_failed' })
 
+        const row = appliedResult.rows[0]
         return {
           state: 'applied',
-          event: eventShape(applied.rows[0]),
-          subscription: subscription.rows[0],
+          event: appliedEvent,
+          subscription: {
+            user_id: row.subscription_user_id,
+            plan_code: row.subscription_plan_code,
+            status: row.subscription_status,
+            current_period_start: row.subscription_period_start,
+            current_period_end: row.subscription_period_end,
+            payment_provider: row.payment_provider,
+          },
         }
       })
     },
