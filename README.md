@@ -25,7 +25,7 @@ MVP SaaS для подготовки, проверки и хранения **ч�
 
 - private gateway за nginx;
 - Supabase JWT/JWKS auth (`RS256/ES256`);
-- **runtime production guard**: `EPD_DEPLOYMENT_MODE=production` не запускается с auth disabled;
+- runtime production guard: `EPD_DEPLOYMENT_MODE=production` не запускается с auth disabled;
 - canonical document reload через Supabase Data API под **USER JWT**;
 - RLS `auth.uid() = user_id` остаётся авторитетной;
 - browser Integration JSON не является источником для внешнего operator-call;
@@ -35,7 +35,6 @@ MVP SaaS для подготовки, проверки и хранения **ч�
 - отдельные pre-auth/user/external rate limits;
 - privacy-safe audit без body/XML/PII/tokens;
 - SHA-256 idempotency по document revision;
-- in-process concurrent duplicate collapse;
 - persistent metadata-only `operator_attempts` journal через restricted PostgreSQL role;
 - история safe operator metadata на карточке документа;
 - `/api/operator/send` жёстко возвращает `503 operator_send_disabled`.
@@ -54,14 +53,14 @@ MVP SaaS для подготовки, проверки и хранения **ч�
 
 - 14-дневный trial entitlement;
 - read-only subscription state для browser JWT;
-- monthly usage;
-- PostgreSQL trigger, считающий реальные INSERT документов;
+- monthly usage + DB quota trigger;
 - metadata-only `billing_payment_events` ledger;
 - provider-event idempotency;
 - restricted `epd_billing_writer` capability-role;
-- server boundary `verified event -> active entitlement`;
-- read-only история safe payment metadata в `/app/billing`;
-- browser не может подделать payment event или сменить план.
+- SECURITY DEFINER boundary `verified event -> active entitlement`;
+- runtime-role не может напрямую `UPDATE subscriptions`;
+- column-level SELECT для browser payment history;
+- история safe payment metadata в `/app/billing`.
 
 Пока намеренно:
 
@@ -70,7 +69,7 @@ billing_settings.enforcement_enabled = false
 EPD_BILLING_PROVIDER=none
 ```
 
-То есть деньги не списываются, checkout/provider webhook/чеки не подключены, отсутствие оплаты никого не блокирует. Success redirect не считается подтверждением платежа.
+Деньги не списываются, checkout/provider webhook/чеки не подключены, отсутствие оплаты никого не блокирует. Success redirect не считается подтверждением платежа.
 
 ## Быстрый local запуск
 
@@ -82,12 +81,13 @@ npm run dev
 
 Без cloud env данные работают в demo/localStorage.
 
-Local gateway допускает:
+Local gateway:
 
 ```env
 EPD_DEPLOYMENT_MODE=local
 EPD_OPERATOR_MODE=disabled
 EPD_GATEWAY_AUTH_MODE=disabled
+EPD_BILLING_PROVIDER=none
 ```
 
 ## Production baseline
@@ -104,11 +104,11 @@ EPD_ALLOWED_ORIGINS=https://epd.example.ru
 EPD_BILLING_PROVIDER=none
 ```
 
-Production gateway сам откажется стартовать без Supabase auth. Billing provider checker отдельно не позволит случайно включить ещё не реализованный payment adapter.
+Production gateway сам откажется стартовать без Supabase auth. Billing checker не позволит случайно включить ещё не реализованный payment adapter.
 
 ## Миграции
 
-Актуально **6 migration-файлов**:
+Актуально **8 migration-файлов**:
 
 ```text
 supabase/migrations/202609010001_init.sql
@@ -117,6 +117,8 @@ supabase/migrations/202609010003_operator_attempts.sql
 supabase/migrations/202609020001_billing_foundation.sql
 supabase/migrations/202609020002_gateway_writer_role.sql
 supabase/migrations/202609020003_billing_payment_events.sql
+supabase/migrations/202609020004_billing_entitlement_function.sql
+supabase/migrations/202609020005_billing_payment_event_column_privileges.sql
 ```
 
 Production:
@@ -127,18 +129,11 @@ npm run db:migrate
 unset EPD_MIGRATION_CONFIRM
 ```
 
-Guarded runner:
-
-- делает encrypted backup до миграций;
-- хранит SHA-256 применённых migration-файлов;
-- запрещает незаметно изменять уже применённую migration;
-- делает второй encrypted backup после успеха.
+Guarded runner делает encrypted backup до/после, хранит SHA-256 применённых migration-файлов и запрещает незаметно переписывать уже применённые миграции.
 
 ## Persistent operator journal
 
-Browser JWT может только читать свои safe metadata из `operator_attempts`.
-
-Gateway runtime использует **отдельный restricted PostgreSQL login**:
+Gateway runtime использует отдельный restricted PostgreSQL login:
 
 ```env
 EPD_GATEWAY_DATABASE_URL=postgresql://epd_gateway:PASSWORD@DB_HOST:5432/DB_NAME
@@ -146,15 +141,11 @@ EPD_GATEWAY_DATABASE_ROLE=epd_gateway_writer
 EPD_OPERATOR_ATTEMPT_STALE_MS=300000
 ```
 
-`epd_gateway_writer` — NOLOGIN capability-role, создаваемая migration. Runtime login получает membership и работает через `SET LOCAL ROLE`.
-
-`EPD_GATEWAY_DATABASE_URL` нельзя заменять административным `EPD_DATABASE_URL`.
-
-Journal хранит только UUID/operation/provider/revision/hash/status metadata. Он не хранит XML, document payload и tokens.
+Browser JWT может только читать свои safe metadata из `operator_attempts`. Journal не хранит XML, document payload и tokens.
 
 ## Billing payment boundary
 
-Будущий verified webhook worker будет использовать **третий отдельный restricted DB-login**:
+Будущий verified webhook worker использует **третий отдельный restricted DB-login**:
 
 ```env
 EPD_BILLING_PROVIDER=none
@@ -173,11 +164,14 @@ provider webhook
  -> hash raw payload
  -> claimVerifiedEvent
  -> unique provider event id
- -> applyVerifiedEntitlement
- -> subscription active
+ -> apply_verified_billing_entitlement(...)
+ -> DB checks verified event/user/plan
+ -> subscription active + event applied atomically
 ```
 
-Raw webhook body, данные карты, CVV и provider secrets в `billing_payment_events` не хранятся. Browser история не запрашивает даже provider event id и payload hash.
+Runtime billing-role не имеет прямого UPDATE к subscription/payment event rows. Browser имеет RLS + column-level SELECT только к безопасной истории и не может запросить `provider_event_id`, `payload_sha256`, `user_id` или internal event id.
+
+Raw webhook body, данные карты, CVV и provider secrets в ledger не хранятся.
 
 ## Kontur sandbox
 
@@ -192,15 +186,11 @@ EPD_KONTUR_BOX_ID=...
 EPD_KONTUR_ACCESS_TOKEN=...
 ```
 
-Flow:
-
 ```text
-Browser sends documentId
+Browser documentId
  -> JWT/JWKS
- -> Supabase Data API with USER JWT
- -> RLS
- -> canonical documents row
- -> ownership check
+ -> USER JWT + RLS canonical reload
+ -> ownership
  -> SHA-256 idempotency
  -> optional persistent claim
  -> UserDataXml
@@ -209,23 +199,6 @@ Browser sends documentId
 ```
 
 Sandbox не выполняет signing/PostMessage.
-
-## Schema checks
-
-ФНС:
-
-```bash
-npm run fns:schema:check
-```
-
-Контур после sandbox credentials:
-
-```bash
-npm run kontur:schema:check
-npm run kontur:schema:save
-```
-
-Изменение версии/хэша схемы не переключает mapping автоматически.
 
 ## Backup/recovery
 
@@ -241,8 +214,6 @@ export EPD_RESTORE_TEST_CONFIRM=RESTORE_TEST_ONLY
 npm run backup:restore:test -- /absolute/path/backup.dump.enc
 unset EPD_RESTORE_TEST_CONFIRM
 ```
-
-Backup: custom `pg_dump` → verify → AES-256/PBKDF2 → SHA-256. Копия на том же VPS не считается полноценным offsite backup.
 
 ## Проверки
 
@@ -286,7 +257,7 @@ GitHub Actions поддерживает ручной `workflow_dispatch`. Ком
 - ParseTitleXml/обратная проверка, если доступна;
 - signing architecture;
 - только потом `PostMessage` и operator statuses/webhooks;
-- выбрать payment provider и реализовать checkout + verified webhook adapter поверх уже готового ledger;
+- выбрать payment provider и реализовать checkout + verified webhook adapter поверх готового ledger;
 - чеки/54-ФЗ и договорная модель до реальных списаний;
 - только после payment smoke-test включить billing enforcement;
 - HTTPS, offsite backups, monitoring и restore drills;
