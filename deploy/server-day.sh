@@ -78,7 +78,7 @@ if [ "$i" -ge 40 ]; then
   exit 1
 fi
 
-echo "== Gateway capabilities =="
+echo "== Operator gateway capabilities =="
 CAPS="$(dc exec -T web wget -q -O - http://127.0.0.1:8080/api/operator/capabilities)"
 if ! printf '%s' "$CAPS" | grep -q '"externalSendEnabled":false'; then
   echo "ERROR: gateway does not report externalSendEnabled=false" >&2
@@ -92,6 +92,24 @@ if printf '%s' "$CAPS" | grep -q '"mode":"sandbox"'; then
 fi
 printf '%s\n' "$CAPS"
 
+echo "== Billing capabilities =="
+BILLING_CAPS="$(dc exec -T web wget -q -O - http://127.0.0.1:8080/api/billing/capabilities)"
+for EXPECTED in \
+  '"provider":"none"' \
+  '"checkoutEnabled":false' \
+  '"webhookEnabled":false' \
+  '"realMoneyEnabled":false' \
+  '"successRedirectAuthoritative":false' \
+  '"directRuntimeSubscriptionUpdateAllowed":false' \
+  '"entitlementDatabaseFunctionRequired":true'
+do
+  if ! printf '%s' "$BILLING_CAPS" | grep -q "$EXPECTED"; then
+    echo "ERROR: billing capabilities violated fail-closed invariant: $EXPECTED" >&2
+    exit 1
+  fi
+done
+printf '%s\n' "$BILLING_CAPS"
+
 echo "== Web security headers =="
 HEADERS="$(dc exec -T web wget -S -O /dev/null http://127.0.0.1:8080/ 2>&1 || true)"
 printf '%s' "$HEADERS" | grep -qi 'Content-Security-Policy:' || { echo "ERROR: CSP header missing" >&2; exit 1; }
@@ -100,4 +118,4 @@ printf '%s' "$HEADERS" | grep -qi 'X-Content-Type-Options: nosniff' || { echo "E
 
 echo "== Deployment started safely =="
 echo "Project HTTP is bound to 127.0.0.1:8080. Put an HTTPS reverse proxy in front of it before public access."
-echo "Billing provider must remain disabled until a verified provider adapter/webhook is deliberately implemented."
+echo "Billing provider, checkout, webhook and real money are confirmed disabled."
