@@ -2,13 +2,15 @@
 
 ## Режимы
 
-Проект поддерживает три разных режима:
+Проект разделяет три режима:
 
-1. **Demo** — localStorage/GitHub Pages, без backend и реальных документов.
-2. **Cloud app** — Auth + PostgreSQL/Supabase + private gateway, operator mode `disabled`.
-3. **Kontur sandbox** — cloud app + реальный `GenerateTitleXml`. Подписание и `PostMessage` всё равно запрещены.
+1. **Demo/local** — `EPD_DEPLOYMENT_MODE=local`, localStorage или локальная разработка; auth может быть отключена только здесь и только при выключенном operator mode.
+2. **Production cloud** — `EPD_DEPLOYMENT_MODE=production`, Supabase/PostgreSQL + JWT/JWKS + private gateway, operator mode может оставаться `disabled`.
+3. **Kontur sandbox** — production cloud + реальный `GenerateTitleXml`; signing и `PostMessage` всё равно запрещены.
 
-## 1. Demo
+Ключевой runtime-инвариант: при `EPD_DEPLOYMENT_MODE=production` gateway **не стартует** с `EPD_GATEWAY_AUTH_MODE=disabled`, даже если `EPD_OPERATOR_MODE=disabled`.
+
+## 1. Local/demo
 
 ```bash
 npm install
@@ -16,13 +18,21 @@ npm run preflight
 npm run dev
 ```
 
-Без Supabase env данные остаются в браузере. GitHub Pages — только UI-стенд.
+Минимальный local env:
+
+```env
+EPD_DEPLOYMENT_MODE=local
+EPD_OPERATOR_MODE=disabled
+EPD_GATEWAY_AUTH_MODE=disabled
+```
+
+GitHub Pages — только UI-стенд. Реальные персональные данные туда не помещаются.
 
 ## 2. Production data/auth prerequisites
 
-Перед cloud-запуском:
-
 ```env
+EPD_DEPLOYMENT_MODE=production
+
 VITE_SUPABASE_URL=https://YOUR_DATA_HOST
 VITE_SUPABASE_ANON_KEY=PUBLIC_KEY
 
@@ -34,22 +44,33 @@ EPD_DATA_SUPABASE_URL=https://YOUR_DATA_HOST
 EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_KEY
 ```
 
-Frontend key и Data API key — публичный anon/publishable key, **не `service_role`**.
+Frontend/Data API key — публичный anon/publishable key, **не `service_role`**.
 
-Примените миграции:
+Актуальные миграции:
 
 ```text
-supabase/migrations/202609010001_init.sql
-supabase/migrations/202609010002_extend_directories_t1.sql
+202609010001_init.sql
+202609010002_extend_directories_t1.sql
+202609010003_operator_attempts.sql
+202609020001_billing_foundation.sql
+202609020002_gateway_writer_role.sql
 ```
 
-RLS `documents_own` должна оставаться активной:
+Production миграции применяются guarded runner'ом:
+
+```bash
+export EPD_MIGRATION_CONFIRM=APPLY_MIGRATIONS
+npm run db:migrate
+unset EPD_MIGRATION_CONFIRM
+```
+
+Runner делает encrypted backup до/после, хранит SHA-256 уже применённых migration-файлов и останавливается при попытке переписать старую миграцию задним числом.
+
+RLS `documents_own` остаётся авторитетной:
 
 ```text
 auth.uid() = user_id
 ```
-
-Sandbox flow читает документ через Data API под пользовательским JWT, чтобы эта RLS оставалась авторитетной.
 
 ## 3. Production env-check
 
@@ -57,7 +78,14 @@ Sandbox flow читает документ через Data API под польз
 cp .env.example .env.production
 ```
 
-После заполнения:
+Для production обязательно поменять:
+
+```env
+EPD_DEPLOYMENT_MODE=production
+EPD_GATEWAY_AUTH_MODE=supabase
+```
+
+Проверка:
 
 ```bash
 set -a
@@ -66,65 +94,78 @@ set +a
 npm run deploy:check
 ```
 
-Checker останавливает запуск при опасных настройках:
+Checker останавливает запуск при опасных настройках, включая:
 
+- `EPD_DEPLOYMENT_MODE != production`;
 - gateway auth не `supabase`;
 - HTTP вместо HTTPS;
 - пустой Data API public key;
 - `service_role` вместо public key;
 - wildcard CORS;
 - server secret/database URL в `VITE_*`;
-- внешний operator rate limit выше обычного;
 - sandbox без Kontur BoxId/token;
-- отсутствующий/невалидный `EPD_DATABASE_URL`;
-- backup passphrase короче 20 символов или совпадает с паролем БД;
-- небезопасный backup retention/directory;
-- restore-test URL совпадает с production DB.
-
-Checker не выводит значения секретов.
-
-Правила checker отдельно покрыты:
+- невалидные rate limits;
+- небезопасные backup/restore настройки;
+- использование admin/migration DB credential как runtime gateway credential;
+- небезопасное имя restricted DB role.
 
 ```bash
 npm run deploy:env:test
 ```
 
-## 4. Docker Compose
+## 4. Restricted operator journal DB login
 
-Compose по умолчанию публикует web **только на loopback**:
+Persistent idempotency для внешних operator-вызовов опционально использует отдельный runtime PostgreSQL login:
+
+```env
+EPD_GATEWAY_DATABASE_URL=postgresql://epd_gateway:PASSWORD@DB_HOST:5432/DB_NAME
+EPD_GATEWAY_DATABASE_ROLE=epd_gateway_writer
+EPD_OPERATOR_ATTEMPT_STALE_MS=300000
+```
+
+`epd_gateway_writer` создаётся как **NOLOGIN capability-role** пятой миграцией. Реальный LOGIN создаётся администратором БД отдельно и получает membership в этой роли.
+
+Gateway в каждой транзакции выполняет `SET LOCAL ROLE epd_gateway_writer`. Роль имеет только необходимые `SELECT/INSERT/UPDATE` права на `operator_attempts`; delete и доступ к документам/подпискам ей не нужен.
+
+`EPD_GATEWAY_DATABASE_URL` нельзя заменять `EPD_DATABASE_URL`: первый — restricted runtime credential, второй — административный credential для migration/backup операций.
+
+Без `EPD_GATEWAY_DATABASE_URL` sandbox остаётся работоспособным, но dedupe гарантируется только внутри текущего gateway-процесса. С ним успешный `GenerateTitleXml` фиксируется metadata-only journal и повтор той же revision блокируется после restart.
+
+## 5. Billing foundation
+
+Миграция `202609020001_billing_foundation.sql` создаёт:
+
+- каталог тарифов;
+- 14-дневный trial;
+- read-only для пользователя subscription entitlement;
+- месячный usage;
+- PostgreSQL trigger на INSERT документа.
+
+По умолчанию:
+
+```text
+billing_settings.enforcement_enabled = false
+```
+
+То есть usage считается, но отсутствие оплаты пока никого не блокирует. Реальный checkout/webhook ещё не подключён.
+
+## 6. Docker Compose
+
+Web публикуется только на loopback:
 
 ```text
 127.0.0.1:8080 -> web container
 ```
 
-Gateway `8787` вообще не публикуется наружу.
-
-Ручной запуск:
+Gateway `8787` наружу не публикуется.
 
 ```bash
 docker compose --env-file .env.production up -d --build
 ```
 
-Проверка:
+Compose передаёт gateway `EPD_DEPLOYMENT_MODE`. Production env должен содержать `production`; default `local` существует только для безопасного local/demo запуска.
 
-```bash
-docker compose ps
-curl -i http://127.0.0.1:8080/healthz
-curl -s http://127.0.0.1:8080/api/operator/capabilities
-```
-
-До sandbox используйте:
-
-```env
-EPD_OPERATOR_PROVIDER=none
-EPD_OPERATOR_MODE=disabled
-```
-
-`externalSendEnabled` должен оставаться `false` всегда, пока production send не реализован отдельно.
-
-## 5. Server-day helper
-
-Когда на сервере уже установлены Docker и Docker Compose plugin, можно запустить безопасный pre-deploy pipeline одной командой:
+## 7. Server-day helper
 
 ```bash
 sh deploy/server-day.sh .env.production
@@ -132,21 +173,22 @@ sh deploy/server-day.sh .env.production
 
 Скрипт:
 
-1. проверяет наличие Docker/Compose;
-2. запускает `deploy:check` в чистом Node 22 container;
-3. запускает offline preflight/security tests;
-4. проверяет `docker compose config`;
-5. собирает образы;
-6. поднимает containers;
-7. ждёт `/healthz`;
-8. читает `/api/operator/capabilities`;
-9. аварийно останавливается, если gateway перестал сообщать `externalSendEnabled=false`.
+1. проверяет Docker/Compose;
+2. запускает deployment/security preflight;
+3. проверяет Supabase RLS repository;
+4. проверяет restricted operator-attempt repository;
+5. проверяет idempotency и billing foundation;
+6. проверяет operator sandbox boundary;
+7. валидирует Compose;
+8. собирает и поднимает containers;
+9. ждёт `/healthz`;
+10. проверяет `/api/operator/capabilities`;
+11. требует `externalSendEnabled=false`;
+12. при sandbox проверяет наличие capability `persistentAttemptJournal`.
 
-Скрипт **не устанавливает Docker**, не изменяет firewall, не настраивает DNS и сам не применяет SQL-миграции.
+Скрипт не устанавливает Docker, не меняет firewall/DNS и не применяет SQL автоматически.
 
-## 6. HTTPS reverse proxy
-
-Публичный трафик должен идти только по HTTPS:
+## 8. HTTPS reverse proxy
 
 ```text
 Internet
@@ -156,75 +198,47 @@ Internet
   -> private gateway:8787
 ```
 
-В репозитории есть пример:
+Шаблон:
 
 ```text
 deploy/Caddyfile.example
 ```
 
-Для Caddy:
-
-1. скопируйте пример в системный Caddyfile;
-2. замените `epd.example.ru` на реальный домен;
-3. направьте DNS A/AAAA на VPS;
-4. откройте наружу только необходимые `80/443`;
-5. оставьте project `8080` на loopback;
-6. gateway `8787` наружу не открывайте.
-
-`EPD_ALLOWED_ORIGINS` задаётся точным HTTPS origin:
+`EPD_ALLOWED_ORIGINS` — только точный HTTPS origin:
 
 ```env
 EPD_ALLOWED_ORIGINS=https://epd.example.ru
 ```
 
-`*` запрещён deployment checker. После выбора домена добавьте его в Supabase Auth redirect URLs.
-
-## 7. Auth/RLS smoke test
+## 9. Auth/RLS smoke test
 
 Двумя тестовыми аккаунтами:
 
 1. A создаёт документ;
 2. B не видит документ A;
-3. Data API под JWT B не возвращает строку документа A по известному ID;
-4. operator gateway без Bearer получает `401`;
+3. Data API под JWT B не возвращает документ A даже по известному UUID;
+4. operator API без Bearer получает `401`;
 5. валидный JWT работает;
-6. чужой documentId для sandbox внешнего действия возвращается как недоступный и не приводит к вызову оператора.
+6. чужой `documentId` не доходит до operator API;
+7. browser JWT не может писать `operator_attempts`;
+8. browser JWT не может менять `subscriptions`/usage;
+9. restricted gateway DB login не имеет общих административных прав.
 
-Frontend-фильтрация не считается разграничением доступа: проверяется именно RLS.
+## 10. Local preview
 
-## 8. Local UserDataXml preview
-
-В `operatorMode=disabled` доступны:
+При выключенном operator mode:
 
 ```text
 POST /api/operator/preflight
 POST /api/operator/kontur/userdata-preview
 ```
 
-Это локальные проверки без внешнего operator API.
+Они не вызывают внешний operator API.
 
-## 9. Проверка схем
-
-ФНС:
-
-```bash
-npm run fns:schema:check
-```
-
-После получения Kontur sandbox credentials:
-
-```bash
-npm run kontur:schema:check
-npm run kontur:schema:save
-```
-
-Изменение версии/хэша не переключает mapping автоматически.
-
-## 10. Намеренное включение Kontur sandbox
-
-Только после auth/RLS/schema проверок:
+## 11. Kontur sandbox
 
 ```env
+EPD_DEPLOYMENT_MODE=production
 EPD_OPERATOR_PROVIDER=kontur
 EPD_OPERATOR_MODE=sandbox
 EPD_GATEWAY_AUTH_MODE=supabase
@@ -233,105 +247,83 @@ EPD_KONTUR_ACCESS_TOKEN=...
 EPD_EXTERNAL_RATE_LIMIT_MAX=10
 ```
 
-Затем:
+Желательно также настроить restricted journal DB login.
 
-```bash
-npm run deploy:check
-docker compose --env-file .env.production up -d --build
-```
-
-В capabilities:
+Flow:
 
 ```text
-sandboxGenerateTitle.enabled = true
-sandboxGenerateTitle.ready   = true
+Browser: {documentId}
+ -> JWT/JWKS
+ -> Supabase Data API under USER JWT
+ -> RLS
+ -> canonical documents row
+ -> ownership check
+ -> SHA-256 action identity
+ -> persistent claim (если настроен)
+ -> in-process duplicate collapse
+ -> UserDataXml
+ -> Kontur GenerateTitleXml
+ -> journal succeeded/failed
 ```
 
-На карточке документа появится `Kontur sandbox`.
+Успешный sandbox результат не подписан и не отправлен.
 
-Кнопка:
+Повтор уже успешно обработанной той же revision при persistent journal блокируется как `sandbox_already_generated` до второго внешнего вызова.
 
-1. показывает отдельное подтверждение;
-2. отправляет gateway только `documentId`;
-3. gateway проверяет JWT;
-4. перечитывает document row через RLS;
-5. заново строит canonical candidate;
-6. повторно проверяет владельца;
-7. вызывает `GenerateTitleXml`;
-8. возвращает XML;
-9. **не подписывает**;
-10. **не вызывает `PostMessage`**.
-
-## 11. Запрещено даже в sandbox
+## 12. Запрещено
 
 - production `/api/operator/send`;
 - `PostMessage`;
-- автоматический статус «отправлен»;
-- signing без отдельной реализации;
-- `service_role` для обхода пользовательской RLS;
-- operator token в `VITE_*`;
-- полный XML/JSON документа в application logs.
+- signing без отдельного проекта signing flow;
+- автоматический статус «отправлен» от пользовательского клика;
+- `service_role` в browser/operator user flow;
+- operator token/DB password в `VITE_*`;
+- XML/JSON документа в application logs;
+- использование admin DB credential в gateway runtime.
 
-## 12. Backup/recovery
+## 13. Backup/recovery
 
-Production checker требует server-only backup configuration:
+Production checker требует:
 
 ```env
-EPD_DATABASE_URL=postgresql://USER:PASSWORD@DB_HOST:5432/DB_NAME
+EPD_DATABASE_URL=postgresql://ADMIN_USER:PASSWORD@DB_HOST:5432/DB_NAME
 EPD_BACKUP_DIR=.backups
 EPD_BACKUP_RETENTION_DAYS=14
 EPD_BACKUP_PASSPHRASE=LONG_RANDOM_SECRET_DIFFERENT_FROM_DB_PASSWORD
 EPD_POSTGRES_CLIENT_IMAGE=postgres:17-alpine
 ```
 
-Создать encrypted backup:
-
 ```bash
 npm run backup:create
+npm run backup:verify -- /absolute/path/epd-light-....dump.enc
 ```
 
-Проверить существующий backup:
+Restore drill — только отдельная test/staging DB:
 
 ```bash
-npm run backup:verify -- /absolute/path/epd-light-YYYYMMDDTHHMMSSZ.dump.enc
+export EPD_RESTORE_TEST_CONFIRM=RESTORE_TEST_ONLY
+npm run backup:restore:test -- /absolute/path/epd-light-....dump.enc
+unset EPD_RESTORE_TEST_CONFIRM
 ```
 
-Restore drill выполняется **только в отдельную disposable test DB**:
+Encrypted backup на том же VPS — только первый уровень. Копия должна уходить отдельно от production VPS; passphrase хранится отдельно.
 
-```env
-EPD_RESTORE_TEST_DATABASE_URL=postgresql://USER:PASSWORD@DB_HOST:5432/epd_restore_test
-EPD_RESTORE_TEST_CONFIRM=RESTORE_TEST_ONLY
-```
+Подробнее: [`BACKUP-RECOVERY.md`](BACKUP-RECOVERY.md).
 
-```bash
-npm run backup:restore:test -- /absolute/path/epd-light-YYYYMMDDTHHMMSSZ.dump.enc
-```
-
-Backup хранится в encrypted виде, получает SHA-256 и автоматически проходит `pg_restore --list`. Plaintext dump временный и удаляется после операции.
-
-Копия на том же VPS не считается полноценным backup: encrypted triplet необходимо переносить в отдельное хранилище/на второй сервер. Backup passphrase рядом с архивом не хранится.
-
-Полный runbook: [`BACKUP-RECOVERY.md`](BACKUP-RECOVERY.md).
-
-Для будущего VPS есть необязательные systemd templates:
-
-```text
-deploy/systemd/epd-light-backup.service.example
-deploy/systemd/epd-light-backup.timer.example
-```
-
-Перед включением они обязательно адаптируются под реального Linux-пользователя, путь проекта и backup directory.
-
-## 13. Server-day checklist
+## 14. Server-day checklist
 
 Перед открытием домена:
 
+- [ ] `EPD_DEPLOYMENT_MODE=production`;
 - [ ] `npm run preflight`;
 - [ ] `npm run deploy:env:test`;
 - [ ] `npm run deploy:check`;
 - [ ] `npm run audit:test`;
 - [ ] `npm run authorization:test`;
 - [ ] `npm run repository:test`;
+- [ ] `npm run attempt-repository:test`;
+- [ ] `npm run idempotency:test`;
+- [ ] `npm run billing:test`;
 - [ ] `npm run rate-limit:test`;
 - [ ] `npm run gateway:test`;
 - [ ] `npm run auth:test`;
@@ -340,21 +332,19 @@ deploy/systemd/epd-light-backup.timer.example
 - [ ] `npm run kontur:generation:test`;
 - [ ] `npm run kontur:sandbox:test`;
 - [ ] `npm run build`;
-- [ ] обе SQL-миграции применены;
+- [ ] все 5 SQL-миграций применены;
 - [ ] RLS проверена двумя аккаунтами;
-- [ ] web container доступен только через `127.0.0.1:8080`;
-- [ ] HTTPS работает на production domain;
-- [ ] Supabase Auth redirect URLs ограничены доменом;
-- [ ] `EPD_ALLOWED_ORIGINS` содержит только нужный HTTPS origin;
+- [ ] restricted gateway DB login создан отдельно от admin DB login;
+- [ ] web доступен только через `127.0.0.1:8080`;
+- [ ] HTTPS работает;
+- [ ] Auth redirect URLs ограничены production доменом;
 - [ ] firewall не публикует `8080/8787`;
-- [ ] `npm run backup:create` успешно создал encrypted backup;
-- [ ] backup verify проходит;
-- [ ] encrypted backup скопирован вне VPS;
-- [ ] первый restore drill выполнен на отдельной test DB;
-- [ ] дата следующего restore drill зафиксирована;
+- [ ] encrypted backup создан и проверен;
+- [ ] backup скопирован вне VPS;
+- [ ] restore drill выполнен;
 - [ ] `externalSendEnabled=false`;
 - [ ] `PostMessage` отсутствует.
 
 ## Контур данных РФ
 
-Production-размещение базы, backend, логов и backups нужно строить с учётом применимых требований российского законодательства и фактического состава персональных данных. Для проекта целевой production-контур планируется в РФ; demo/development инфраструктуру нельзя автоматически использовать для реальных персональных данных.
+Production-размещение БД, backend, логов и backups строится отдельно от GitHub/demo с учётом фактического состава данных и применимых требований. Целевой production-контур проекта — в РФ; GitHub хранит исходный код, но не пользовательские документы/ПД/секреты.
