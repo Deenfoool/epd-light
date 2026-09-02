@@ -6,11 +6,13 @@ export function buildTechnicalReadiness({
   sandboxReady = false,
   operatorAttemptJournalStatus,
   billingCapabilities,
+  buildInfo,
   allowedOriginsCount = 0,
 } = {}) {
   const productionMode = authConfig?.deploymentMode === 'production'
   const authReady = authConfig?.mode === 'supabase'
   const documentsReady = Boolean(documentRepositoryStatus?.configured)
+  const traceableBuild = Boolean(buildInfo?.traceableBuild)
   const operatorModeAllowed = operatorMode === 'disabled' || (operatorMode === 'sandbox' && operatorProvider === 'kontur')
   const operatorReady = operatorMode === 'disabled' ? true : Boolean(sandboxReady)
   const billingFailClosed = billingCapabilities?.provider === 'none'
@@ -26,6 +28,7 @@ export function buildTechnicalReadiness({
     productionMode,
     jwtJwksAuth: authReady,
     canonicalDocumentRepository: documentsReady,
+    traceableRuntimeBuild: traceableBuild,
     exactCorsOriginsConfigured: corsReady,
     operatorModeAllowed,
     operatorBoundaryReady: operatorReady,
@@ -40,6 +43,12 @@ export function buildTechnicalReadiness({
     checks,
     optional: {
       persistentOperatorJournalConfigured: Boolean(operatorAttemptJournalStatus?.configured),
+    },
+    build: {
+      traceable: traceableBuild,
+      release: String(buildInfo?.release || 'unknown'),
+      shortCommit: String(buildInfo?.shortCommit || 'unknown'),
+      buildTime: String(buildInfo?.buildTime || 'unknown'),
     },
     operator: {
       mode: String(operatorMode),
