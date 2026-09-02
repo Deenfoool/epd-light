@@ -24,11 +24,13 @@ jobs:
           node --check server/audit.mjs
           node --check server/auth.mjs
           node --check server/authorization.mjs
+          node --check server/billing.mjs
           node --check server/idempotency.mjs
           node --check server/rate-limit.mjs
           node --check server/mappers/operator-candidate.mjs
           node --check server/repositories/supabase-documents.mjs
           node --check server/repositories/operator-attempts.mjs
+          node --check server/repositories/billing-events.mjs
           node --check server/providers/kontur.mjs
           node --check server/providers/kontur-userdata.mjs
           node --check server/services/kontur-title.mjs
@@ -37,7 +39,9 @@ jobs:
           node --check scripts/preflight-deploy.mjs
           node --check scripts/preflight-runtime.mjs
           node --check scripts/check-deployment-env.mjs
+          node --check scripts/check-billing-env.mjs
           node --check scripts/test-deployment-env.mjs
+          node --check scripts/test-billing-env.mjs
           node --check scripts/check-fns-schema.mjs
           node --check scripts/check-kontur-schemas.mjs
           node --check scripts/test-audit.mjs
@@ -48,6 +52,7 @@ jobs:
           node --check scripts/test-operator-attempt-client.mjs
           node --check scripts/test-idempotency.mjs
           node --check scripts/test-billing-foundation.mjs
+          node --check scripts/test-billing-payment-boundary.mjs
           node --check scripts/test-web-security.mjs
           node --check scripts/test-rate-limit.mjs
           node --check scripts/test-gateway.mjs
@@ -81,6 +86,10 @@ jobs:
         run: npm run idempotency:test
       - name: Billing foundation
         run: npm run billing:test
+      - name: Billing payment boundary
+        run: npm run billing-payment:test
+      - name: Billing environment isolation
+        run: npm run billing-env:test
       - name: Rate limiter unit test
         run: npm run rate-limit:test
       - name: Gateway smoke test (local auth disabled)
