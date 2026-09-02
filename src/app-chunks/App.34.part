@@ -1,6 +1,7 @@
     else if(pathname==='/app/import')content=<ImportPage reloadCompanies={reloadCompanies} onDocCreated={(x)=>setDocs(a=>[x,...a.filter(z=>z.id!==x.id)])}/>
     else if(pathname==='/app/integrations')content=<Integrations profile={profile}/>
     else if(pathname==='/app/billing')content=<BillingPage/>
+    else if(pathname==='/app/privacy')content=<PrivacyPage/>
     else if(pathname==='/app/onboarding')content=<Onboarding profile={profile} onDone={setProfileState}/>
     else content=<Card><h2>Страница не найдена</h2></Card>
     return <AppShell email={email} onSignout={logout}>{content}<Toast text={toast}/></AppShell>
