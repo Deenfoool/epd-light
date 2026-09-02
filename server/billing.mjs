@@ -49,6 +49,8 @@ export const BILLING_PAYMENT_POLICY = Object.freeze({
   verifiedWebhookRequiredForActivation: true,
   webhookRouteImplemented: false,
   rawProviderPayloadStored: false,
+  directRuntimeSubscriptionUpdateAllowed: false,
+  entitlementDatabaseFunctionRequired: true,
   billingEnforcementDefault: false,
   realMoneyEnabled: false,
 })
