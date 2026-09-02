@@ -26,6 +26,7 @@ const baseUrl = `http://127.0.0.1:${address.port}`
 const issuer = `${baseUrl}/auth/v1`
 
 const config = assertGatewayAuthConfig(gatewayAuthConfigFromEnv({
+  EPD_DEPLOYMENT_MODE: 'production',
   EPD_GATEWAY_AUTH_MODE: 'supabase',
   EPD_AUTH_SUPABASE_URL: baseUrl,
   EPD_AUTH_AUDIENCE: 'authenticated',
@@ -67,18 +68,44 @@ try {
   const rightClient = await authenticateGatewayRequest({ headers: { authorization: `Bearer ${await sign({ clientId: 'epd-light-web' })}` } }, clientConfig)
   assert(rightClient.ok === true, 'allowed client_id should authenticate')
 
-  const disabled = assertGatewayAuthConfig(gatewayAuthConfigFromEnv({ EPD_GATEWAY_AUTH_MODE: 'disabled' }), 'disabled')
+  const disabled = assertGatewayAuthConfig(gatewayAuthConfigFromEnv({
+    EPD_DEPLOYMENT_MODE: 'local',
+    EPD_GATEWAY_AUTH_MODE: 'disabled',
+  }), 'disabled')
   const local = await authenticateGatewayRequest({ headers: {} }, disabled)
   assert(local.ok === true && local.mode === 'disabled', 'disabled auth mode must support local demo')
+  assert(disabled.deploymentMode === 'local', 'local deployment mode must be explicit in config')
+
+  let productionWithoutAuthRejected = false
+  try {
+    assertGatewayAuthConfig(gatewayAuthConfigFromEnv({
+      EPD_DEPLOYMENT_MODE: 'production',
+      EPD_GATEWAY_AUTH_MODE: 'disabled',
+    }), 'disabled')
+  } catch (error) {
+    productionWithoutAuthRejected = String(error?.message || '').includes('Production deployment requires')
+  }
+  assert(productionWithoutAuthRejected, 'production deployment must reject disabled gateway auth even when operator mode is disabled')
 
   let unsafeModeRejected = false
   try { assertGatewayAuthConfig(disabled, 'sandbox') } catch { unsafeModeRejected = true }
   assert(unsafeModeRejected, 'non-disabled operator mode must reject disabled gateway auth')
 
+  let unknownDeploymentRejected = false
+  try {
+    assertGatewayAuthConfig(gatewayAuthConfigFromEnv({
+      EPD_DEPLOYMENT_MODE: 'internet',
+      EPD_GATEWAY_AUTH_MODE: 'supabase',
+      EPD_AUTH_SUPABASE_URL: baseUrl,
+    }), 'disabled')
+  } catch { unknownDeploymentRejected = true }
+  assert(unknownDeploymentRejected, 'unknown deployment mode must fail closed')
+
   assert(config.jwksUrl.endsWith('/auth/v1/.well-known/jwks.json'), 'wrong Supabase JWKS path')
   assert(config.algorithms.includes('RS256') && config.algorithms.includes('ES256'), 'asymmetric algorithm allow-list missing')
+  assert(config.deploymentMode === 'production', 'production deployment mode not preserved')
 
-  console.log('Gateway auth test OK: local JWKS, RS256 signature, iss/aud/role/client and non-serializable RLS token verified')
+  console.log('Gateway auth test OK: local JWKS, production fail-closed auth, RS256 signature, iss/aud/role/client and non-serializable RLS token verified')
 } finally {
   await new Promise((resolve) => jwksServer.close(resolve))
 }
