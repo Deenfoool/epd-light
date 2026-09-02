@@ -20,6 +20,17 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
+BUILD_COMMIT="${EPD_BUILD_COMMIT:-}"
+if [ -z "$BUILD_COMMIT" ] && command -v git >/dev/null 2>&1; then
+  BUILD_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+fi
+if ! printf '%s' "$BUILD_COMMIT" | grep -Eq '^[0-9a-fA-F]{7,64}$'; then
+  echo "ERROR: deployment requires a traceable git commit. Run from a git checkout or set EPD_BUILD_COMMIT explicitly." >&2
+  exit 1
+fi
+BUILD_COMMIT="$(printf '%s' "$BUILD_COMMIT" | tr 'A-F' 'a-f')"
+BUILD_TIME="${EPD_BUILD_TIME:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+
 run_node() {
   docker run --rm \
     --env-file "$ENV_FILE" \
@@ -29,10 +40,14 @@ run_node() {
 }
 
 dc() {
+  EPD_BUILD_COMMIT="$BUILD_COMMIT" \
+  EPD_BUILD_TIME="$BUILD_TIME" \
   docker compose --env-file "$ENV_FILE" "$@"
 }
 
 echo "== EPD Light server-day prechecks =="
+echo "Deploy commit: $BUILD_COMMIT"
+echo "Build time: $BUILD_TIME"
 run_node scripts/check-deployment-env.mjs
 run_node scripts/check-billing-env.mjs
 run_node scripts/preflight-deploy.mjs
@@ -79,6 +94,21 @@ if [ "$i" -ge 40 ]; then
   exit 1
 fi
 
+echo "== Runtime version =="
+VERSION="$(dc exec -T web wget -q -O - http://127.0.0.1:8080/api/system/version)"
+for EXPECTED in \
+  '"traceableBuild":true' \
+  '"sensitiveValuesIncluded":false' \
+  "\"commit\":\"$BUILD_COMMIT\""
+do
+  if ! printf '%s' "$VERSION" | grep -q "$EXPECTED"; then
+    echo "ERROR: runtime version does not match deployment source: $EXPECTED" >&2
+    printf '%s\n' "$VERSION" >&2
+    exit 1
+  fi
+done
+printf '%s\n' "$VERSION"
+
 echo "== Operator gateway capabilities =="
 CAPS="$(dc exec -T web wget -q -O - http://127.0.0.1:8080/api/operator/capabilities)"
 if ! printf '%s' "$CAPS" | grep -q '"externalSendEnabled":false'; then
@@ -117,6 +147,7 @@ for EXPECTED in \
   '"technicalReadinessOnly":true' \
   '"legalReadinessClaimed":false' \
   '"productionBaselineReady":true' \
+  '"traceableRuntimeBuild":true' \
   '"sensitiveValuesIncluded":false'
 do
   if ! printf '%s' "$READINESS" | grep -q "$EXPECTED"; then
@@ -134,6 +165,7 @@ printf '%s' "$HEADERS" | grep -qi 'X-Frame-Options: DENY' || { echo "ERROR: X-Fr
 printf '%s' "$HEADERS" | grep -qi 'X-Content-Type-Options: nosniff' || { echo "ERROR: nosniff header missing" >&2; exit 1; }
 
 echo "== Deployment started safely =="
+echo "Runtime commit verified: $BUILD_COMMIT"
 echo "Project HTTP is bound to 127.0.0.1:8080. Put an HTTPS reverse proxy in front of it before public access."
 echo "Technical production baseline is ready; this check does not claim legal or operator-production readiness."
 echo "Billing provider, checkout, webhook and real money are confirmed disabled."
