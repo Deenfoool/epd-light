@@ -15,7 +15,9 @@
 - metadata-only ledger `billing_payment_events`;
 - отдельную server-only capability-role `epd_billing_writer`;
 - provider-event idempotency через unique `(provider, provider_event_id)`;
-- server repository `claimVerifiedEvent -> applyVerifiedEntitlement`;
+- SECURITY DEFINER функцию `apply_verified_billing_entitlement`;
+- запрет прямого runtime `UPDATE subscriptions`;
+- column-level SELECT для browser payment history;
 - read-only историю безопасных payment metadata в `/app/billing`;
 - браузерные роли без права менять подписку, usage или payment events.
 
@@ -56,21 +58,25 @@ EPD_BILLING_PROVIDER=none
 
 ## Payment-event ledger
 
-`billing_payment_events` хранит только технические metadata уже обработанного будущим provider adapter события:
+`billing_payment_events` server-side хранит:
 
 - user id;
 - provider;
-- provider event id — server-side idempotency identity;
+- provider event id — idempotency identity;
 - event type/status;
 - plan code;
-- сумма в копейках и валюта;
+- сумму в копейках и валюту;
 - SHA-256 исходного payload;
 - безопасный error code;
 - timestamps.
 
 Таблица **не хранит** raw webhook body, номер карты, CVV, платёжные секреты или provider credentials.
 
-Browser UI намеренно запрашивает ещё более узкий набор:
+### Что может прочитать browser
+
+RLS ограничивает строки условием `auth.uid() = user_id`, а отдельная миграция дополнительно ограничивает **колонки**.
+
+Authenticated browser может SELECT только:
 
 ```text
 provider
@@ -84,7 +90,18 @@ provider
  processed_at
 ```
 
-Он не получает `provider_event_id` и `payload_sha256` и не имеет INSERT/UPDATE/DELETE к payment events.
+Он не имеет SELECT к:
+
+```text
+id
+user_id
+provider_event_id
+payload_sha256
+```
+
+и не имеет INSERT/UPDATE/DELETE к payment events.
+
+Поэтому это ограничение действует даже при прямом обращении к Supabase Data API, а не только в React UI.
 
 ## Server-owned verified event flow
 
@@ -101,12 +118,35 @@ Browser
   -> claimVerifiedEvent()
   -> unique provider event id блокирует повтор
   -> applyVerifiedEntitlement()
-  -> subscription active
+  -> DB function verifies event/user/plan/status
+  -> subscription active + event applied atomically
 ```
 
 `success_url`/redirect браузера **никогда не является доказательством оплаты**.
 
 В текущем коде provider adapter/webhook route отсутствует, поэтому `claimVerifiedEvent` нельзя вызвать из браузера. Репозиторий — server-only boundary для будущей проверенной интеграции.
+
+## DB-enforced entitlement boundary
+
+Runtime billing-role **не имеет** прямого `UPDATE` на `subscriptions` и после hardening-миграции не имеет прямого `UPDATE` на payment ledger.
+
+Вместо этого ей разрешён только EXECUTE:
+
+```text
+public.apply_verified_billing_entitlement(...)
+```
+
+Функция использует `SECURITY DEFINER` с фиксированным `search_path = pg_catalog, public` и внутри одной транзакции требует:
+
+- event существует;
+- event принадлежит нужному user;
+- status ровно `verified`;
+- plan совпадает;
+- billing period валиден.
+
+Только затем subscription становится `active`, а event — `applied`.
+
+Таким образом обычный runtime SQL `UPDATE subscriptions SET status='active'` под `epd_billing_writer` запрещён самой БД.
 
 ## Restricted billing credential
 
@@ -118,7 +158,7 @@ EPD_BILLING_DATABASE_URL=
 EPD_BILLING_DATABASE_ROLE=epd_billing_writer
 ```
 
-`epd_billing_writer` — NOLOGIN capability-role, создаваемая migration. Production создаст отдельный LOGIN и выдаст membership.
+`epd_billing_writer` — NOLOGIN capability-role. Production создаст отдельный LOGIN и выдаст membership.
 
 Этот credential нельзя переиспользовать как:
 
@@ -135,7 +175,7 @@ Deployment checker это контролирует.
 - свою `subscriptions`;
 - свой `billing_usage_monthly`;
 - безопасные `billing_settings`;
-- свои `billing_payment_events` metadata.
+- только разрешённые колонки своих `billing_payment_events`.
 
 Он не может писать в:
 
@@ -178,24 +218,19 @@ Deployment checker это контролирует.
 9. провести end-to-end sandbox/payment smoke test;
 10. только после этого изменить `EPD_BILLING_PROVIDER` и включать `enforcement_enabled=true` отдельным rollout.
 
-## Миграции
-
-Billing foundation:
+## Billing-миграции
 
 ```text
-supabase/migrations/202609020001_billing_foundation.sql
+202609020001_billing_foundation.sql
+202609020003_billing_payment_events.sql
+202609020004_billing_entitlement_function.sql
+202609020005_billing_payment_event_column_privileges.sql
 ```
 
-Operator writer:
+Связанная operator writer migration:
 
 ```text
-supabase/migrations/202609020002_gateway_writer_role.sql
-```
-
-Payment-event ledger / billing capability role:
-
-```text
-supabase/migrations/202609020003_billing_payment_events.sql
+202609020002_gateway_writer_role.sql
 ```
 
 Все migration-файлы применяются общим guarded runner, а не вручную по одному.
@@ -210,4 +245,4 @@ npm run billing-env:test
 npm run preflight
 ```
 
-Они фиксируют тарифы/trial, browser read-only boundary, provider-event idempotency, запрет raw payment data, раздельные DB credentials и то, что реальный provider пока выключен.
+Они фиксируют тарифы/trial, browser read-only boundary, column privileges, provider-event idempotency, DB-enforced activation, запрет raw payment data, раздельные DB credentials и то, что реальный provider пока выключен.
