@@ -26,6 +26,7 @@ jobs:
           node --check server/authorization.mjs
           node --check server/billing.mjs
           node --check server/build-info.mjs
+          node --check server/dependency-check.mjs
           node --check server/idempotency.mjs
           node --check server/rate-limit.mjs
           node --check server/readiness.mjs
@@ -43,6 +44,7 @@ jobs:
           node --check scripts/preflight-runtime.mjs
           node --check scripts/check-deployment-env.mjs
           node --check scripts/check-billing-env.mjs
+          node --check scripts/check-runtime-dependencies.mjs
           node --check scripts/test-deployment-env.mjs
           node --check scripts/test-billing-env.mjs
           node --check scripts/check-fns-schema.mjs
@@ -58,6 +60,7 @@ jobs:
           node --check scripts/test-billing-payment-boundary.mjs
           node --check scripts/test-billing-payment-client.mjs
           node --check scripts/test-build-info.mjs
+          node --check scripts/test-dependency-check.mjs
           node --check scripts/test-readiness.mjs
           node --check scripts/test-web-security.mjs
           node --check scripts/test-rate-limit.mjs
@@ -78,6 +81,8 @@ jobs:
         run: npm run deploy:env:test
       - name: Runtime build metadata
         run: npm run build-info:test
+      - name: Runtime dependency boundary
+        run: npm run dependency:test
       - name: Technical readiness policy
         run: npm run readiness:test
       - name: Web security headers
