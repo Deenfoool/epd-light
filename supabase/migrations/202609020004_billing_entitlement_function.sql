@@ -1,6 +1,6 @@
 -- Harden billing entitlement writes: the restricted billing role may no longer UPDATE
--- subscriptions directly. It can only execute this function, which requires a matching
--- verified payment event and applies entitlement + event transition atomically.
+-- subscriptions or payment-event rows directly. Entitlement + verified->applied transition
+-- happens only inside this SECURITY DEFINER function.
 
 create or replace function public.apply_verified_billing_entitlement(
   p_event_id uuid,
@@ -23,7 +23,7 @@ returns table (
 )
 language plpgsql
 security definer
-set search_path = public, pg_catalog
+set search_path = pg_catalog, public
 as $$
 declare
   v_event public.billing_payment_events%rowtype;
@@ -103,10 +103,12 @@ revoke all on function public.apply_verified_billing_entitlement(uuid, uuid, tex
 grant execute on function public.apply_verified_billing_entitlement(uuid, uuid, text, date, date, text, text)
   to epd_billing_writer;
 
--- The billing runtime role must not be able to bypass the verified-event function.
+-- The billing runtime role must not bypass the verified-event function with direct writes.
 revoke update on public.subscriptions from epd_billing_writer;
+revoke update on public.billing_payment_events from epd_billing_writer;
 
 drop policy if exists subscriptions_billing_writer_update on public.subscriptions;
+drop policy if exists billing_payment_events_writer_update on public.billing_payment_events;
 
 comment on function public.apply_verified_billing_entitlement(uuid, uuid, text, date, date, text, text)
 is 'Only server-owned verified payment events may atomically activate a subscription; browser roles have no EXECUTE permission.';
