@@ -28,6 +28,7 @@ jobs:
           node --check server/rate-limit.mjs
           node --check server/mappers/operator-candidate.mjs
           node --check server/repositories/supabase-documents.mjs
+          node --check server/repositories/operator-attempts.mjs
           node --check server/providers/kontur.mjs
           node --check server/providers/kontur-userdata.mjs
           node --check server/services/kontur-title.mjs
@@ -74,7 +75,7 @@ jobs:
         run: npm run rate-limit:test
       - name: Gateway smoke test (local auth disabled)
         run: npm run gateway:test
-      - name: Kontur sandbox canonical flow
+      - name: Kontur sandbox canonical and persistent-dedupe flow
         run: npm run kontur:sandbox:test
       - name: Install dependencies
         run: npm install
