@@ -10,121 +10,32 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Gateway and script syntax
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Preflight, tests, formatting and production build
+        run: npm run check
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Build production containers
         run: |
-          node --check server/index.mjs
-          node --check server/audit.mjs
-          node --check server/auth.mjs
-          node --check server/authorization.mjs
-          node --check server/billing.mjs
-          node --check server/build-info.mjs
-          node --check server/dependency-check.mjs
-          node --check server/idempotency.mjs
-          node --check server/rate-limit.mjs
-          node --check server/readiness.mjs
-          node --check server/mappers/operator-candidate.mjs
-          node --check server/repositories/supabase-documents.mjs
-          node --check server/repositories/operator-attempts.mjs
-          node --check server/repositories/billing-events.mjs
-          node --check server/providers/kontur.mjs
-          node --check server/providers/kontur-userdata.mjs
-          node --check server/services/kontur-title.mjs
-          node --check server/services/kontur-sandbox.mjs
-          node --check scripts/preflight.mjs
-          node --check scripts/preflight-deploy.mjs
-          node --check scripts/preflight-billing.mjs
-          node --check scripts/preflight-runtime.mjs
-          node --check scripts/check-deployment-env.mjs
-          node --check scripts/check-billing-env.mjs
-          node --check scripts/check-runtime-dependencies.mjs
-          node --check scripts/test-deployment-env.mjs
-          node --check scripts/test-billing-env.mjs
-          node --check scripts/check-fns-schema.mjs
-          node --check scripts/check-kontur-schemas.mjs
-          node --check scripts/test-audit.mjs
-          node --check scripts/test-auth.mjs
-          node --check scripts/test-authorization.mjs
-          node --check scripts/test-supabase-repository.mjs
-          node --check scripts/test-operator-attempt-repository.mjs
-          node --check scripts/test-operator-attempt-client.mjs
-          node --check scripts/test-idempotency.mjs
-          node --check scripts/test-billing-foundation.mjs
-          node --check scripts/test-billing-payment-boundary.mjs
-          node --check scripts/test-billing-payment-client.mjs
-          node --check scripts/test-build-info.mjs
-          node --check scripts/test-dependency-check.mjs
-          node --check scripts/test-readiness.mjs
-          node --check scripts/test-web-security.mjs
-          node --check scripts/test-rate-limit.mjs
-          node --check scripts/test-gateway.mjs
-          node --check scripts/test-gateway-auth.mjs
-          node --check scripts/test-kontur-provider.mjs
-          node --check scripts/test-kontur-userdata.mjs
-          node --check scripts/test-kontur-generation.mjs
-          node --check scripts/test-kontur-sandbox.mjs
-          sh -n deploy/server-day.sh
-          sh -n deploy/apply-migrations.sh
-          sh -n deploy/check-migrations.sh
-          sh -n deploy/backup-postgres.sh
-          sh -n deploy/verify-postgres-backup.sh
-          sh -n deploy/test-restore-postgres.sh
-      - name: Offline invariants
-        run: npm run preflight
-      - name: Deployment env policy
-        run: npm run deploy:env:test
-      - name: Runtime build metadata
-        run: npm run build-info:test
-      - name: Runtime dependency boundary
-        run: npm run dependency:test
-      - name: Technical readiness policy
-        run: npm run readiness:test
-      - name: Web security headers
-        run: npm run web-security:test
-      - name: Privacy-safe audit
-        run: npm run audit:test
-      - name: External document authorization policy
-        run: npm run authorization:test
-      - name: Canonical Supabase RLS repository
-        run: npm run repository:test
-      - name: Restricted operator journal repository
-        run: npm run attempt-repository:test
-      - name: Operator journal browser boundary
-        run: npm run attempt-client:test
-      - name: Operator idempotency
-        run: npm run idempotency:test
-      - name: Billing foundation
-        run: npm run billing:test
-      - name: Billing payment boundary
-        run: npm run billing-payment:test
-      - name: Billing payment browser history boundary
-        run: npm run billing-payment-client:test
-      - name: Billing environment isolation
-        run: npm run billing-env:test
-      - name: Rate limiter unit test
-        run: npm run rate-limit:test
-      - name: Gateway smoke test (local auth disabled)
-        run: npm run gateway:test
-      - name: Kontur sandbox canonical and persistent-dedupe flow
-        run: npm run kontur:sandbox:test
-      - name: Install dependencies
-        run: npm install
-      - name: Supabase JWT/JWKS auth
-        run: npm run auth:test
-      - name: Authenticated gateway integration
-        run: npm run gateway:auth:test
-      - name: Kontur provider contract
-        run: npm run kontur:provider:test
-      - name: Kontur UserDataXml preview mapping
-        run: npm run kontur:userdata:test
-      - name: Kontur GenerateTitle boundary
-        run: npm run kontur:generation:test
-      - name: Production build
-        run: npm run build
+          docker build --tag epd-light-web:ci .
+          docker build --tag epd-light-gateway:ci ./server

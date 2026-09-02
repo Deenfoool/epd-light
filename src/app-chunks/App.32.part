@@ -1,9 +1,0 @@
-    const logout=async()=>{await signOut();setEmail(null);go('/')}
-    if(!profile.onboarded&&cloudEnabled&&pathname!=='/app/onboarding')return <AppShell email={email} onSignout={logout}><Onboarding profile={profile} onDone={setProfileState}/></AppShell>
-    let content:any
-    if(pathname==='/app'||pathname==='/app/') content=<Dashboard docs={docs}/>
-    else if(pathname==='/app/documents')content=<Documents docs={docs} reload={reloadDocs}/>
-    else if(pathname==='/app/documents/new'){
-      content=<NewDocumentPage onCreated={(x)=>setDocs(a=>[x,...a.filter(z=>z.id!==x.id)])}/>
-    } else if(pathname.startsWith('/app/documents/')){
-      const parts=pathname.split('/');const id=parts[3];const edit=parts[4]==='edit';const d=docs.find(x=>x.id===id);content=d?(edit?<Wizard doc={d} companies={companies} vehicles={vehicles} drivers={drivers} onSaved={(x)=>setDocs(a=>a.map(z=>z.id===x.id?x:z))} onDirectoriesChanged={async()=>{await Promise.all([reloadCompanies(),reloadVehicles(),reloadDrivers()])}}/>:<DocumentView doc={d} reload={reloadDocs}/>):<Card><h2>Документ не найден</h2></Card>

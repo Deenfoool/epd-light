@@ -83,7 +83,7 @@ assert(status.configured === true, 'billing repository should recognize restrict
 assert(status.rawWebhookPayloadStored === false && status.cardDataStored === false && status.secretsStored === false, 'billing repository capabilities must stay metadata-only')
 assert(status.directSubscriptionUpdateAllowed === false, 'billing runtime must not allow direct subscription update')
 assert(status.entitlementDatabaseFunctionRequired === true, 'verified-event DB function must be mandatory')
-assert(JSON.stringify(status).includes('secret') === false, 'billing repository status must not expose connection string')
+assert(!JSON.stringify(status).includes('postgresql://') && !JSON.stringify(status).includes('billing:secret'), 'billing repository status must not expose connection string')
 
 for (const snippet of [
   "set local role ${config.writerRole}",
@@ -98,7 +98,7 @@ for (const forbidden of [
   'update public.subscriptions',
   "set event_status='applied'",
   'console.log(config.connectionString)',
-  'rawWebhookPayload',
+  'rawWebhookPayload:',
   'cardNumber',
   'cvv',
   'request.body',

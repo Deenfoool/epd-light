@@ -37,6 +37,6 @@ const allowed = await authorizeExternalOperatorDocument({
 assert(allowed.ok === true && allowed.candidate === candidate, 'owned canonical candidate must be authorized')
 assert(EXTERNAL_OPERATOR_AUTHORIZATION_POLICY.clientPayloadAuthoritative === false, 'client payload must never be authoritative for external call')
 assert(EXTERNAL_OPERATOR_AUTHORIZATION_POLICY.serverLoadedDocumentRequired === true, 'server-loaded canonical document must be required')
-assert(EXTERNAL_OPERATOR_AUTHORIZATION_POLICY.backendDocumentRepositoryReady === false, 'repository must not be claimed ready before implementation')
+assert(EXTERNAL_OPERATOR_AUTHORIZATION_POLICY.backendDocumentRepositoryAdapterReady === true, 'implemented repository adapter must be reported ready')
 
 console.log('External operator authorization test OK: JWT subject ownership, hidden cross-account IDs and canonical server document policy verified')

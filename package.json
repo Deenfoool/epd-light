@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "check": "npm run syntax:check && npm run preflight && npm test && npm run format:check && npm run build",
+    "syntax:check": "node scripts/check-syntax.mjs",
+    "test": "node scripts/run-tests.mjs",
     "preflight": "node scripts/preflight-deploy.mjs && node scripts/preflight-source.mjs && node scripts/preflight-migrations.mjs && node scripts/preflight-backup.mjs && node scripts/preflight-privacy.mjs && node scripts/preflight-billing.mjs && node scripts/preflight-runtime.mjs && node scripts/preflight.mjs",
     "deploy:check": "node scripts/check-deployment-env.mjs && node scripts/check-billing-env.mjs",
     "deploy:env:test": "node scripts/test-deployment-env.mjs && node scripts/test-billing-env.mjs",
@@ -42,10 +45,10 @@
     "kontur:schema:save": "node scripts/check-kontur-schemas.mjs --save",
     "fns:schema:check": "node scripts/check-fns-schema.mjs",
     "fns:schema:save": "node scripts/check-fns-schema.mjs --save",
-    "predev": "node scripts/assemble-app.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/assemble-app.mjs",
     "build": "tsc -b && vite build",
+    "format": "prettier --write src/App.tsx",
+    "format:check": "prettier --check src/App.tsx",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -60,6 +63,7 @@
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "@vitejs/plugin-react": "5.2.0",
+    "prettier": "3.9.6",
     "typescript": "5.8.3",
     "vite": "8.1.5"
   }

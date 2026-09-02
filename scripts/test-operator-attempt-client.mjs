@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises'
 
 const assert = (condition, message) => { if (!condition) throw new Error(message) }
 const client = await readFile('src/operator-attempts.ts', 'utf8')
-const app = await readFile('src/app-chunks/App.22.part', 'utf8')
+const app = await readFile('src/App.tsx', 'utf8')
+const appCompact = app.replace(/\s+/g, '')
 
 for (const snippet of [
   "from('operator_attempts')",
@@ -25,7 +26,7 @@ for (const snippet of [
   'request_fingerprint',
   'safe_error_code',
   'XML, токены и данные ЭТрН здесь не хранятся',
-]) assert(app.includes(snippet), `document operator-history UI missing invariant: ${snippet}`)
+]) assert(appCompact.includes(snippet.replace(/\s+/g, '')), `document operator-history UI missing invariant: ${snippet}`)
 
 assert(!app.includes('a.generatedXml'), 'operator history UI must not expect generated XML from journal')
 assert(!app.includes('a.document_payload'), 'operator history UI must not expect document payload from journal')

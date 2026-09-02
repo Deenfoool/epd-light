@@ -2,9 +2,10 @@ import { readFile } from 'node:fs/promises'
 
 const assert = (condition, message) => { if (!condition) throw new Error(message) }
 const migration = await readFile('supabase/migrations/202609020001_billing_foundation.sql', 'utf8')
-const pricing = await readFile('src/app-chunks/App.06.part', 'utf8')
+const pricing = await readFile('src/App.tsx', 'utf8')
 const billing = await readFile('src/billing.ts', 'utf8')
-const app = await Promise.all(['01','09','12','29','34'].map((part) => readFile(`src/app-chunks/App.${part}.part`, 'utf8'))).then((parts) => parts.join('\n'))
+const app = pricing
+const appCompact = app.replace(/\s+/g, '')
 
 for (const snippet of [
   "('start', 'Старт', 990, 50",
@@ -35,7 +36,7 @@ assert(migration.includes("sub_status = 'active'"), 'active subscription state m
 assert(migration.includes('deleting a document does not refund quota'), 'quota semantics must be documented')
 
 for (const snippet of ['990 ₽', '2 490 ₽', '4 990 ₽', 'до 50 новых черновиков', 'до 500 новых черновиков', 'до 2000 новых черновиков']) {
-  assert(pricing.includes(snippet), `pricing UI drifted from billing catalogue: ${snippet}`)
+  assert(appCompact.includes(snippet.replace(/\s+/g, '')), `pricing UI drifted from billing catalogue: ${snippet}`)
 }
 for (const snippet of [
   "code: 'start'", 'monthly_price_rub: 990', "code: 'business'", 'monthly_price_rub: 2490', "code: 'team'", 'monthly_price_rub: 4990',
@@ -46,6 +47,6 @@ assert(!billing.includes(".order('period_start', { ascending: false }).limit(1)"
 for (const snippet of [
   "'/app/billing'", 'function BillingPage()', 'Тариф и лимиты', 'billingErrorMessage',
   'Лимиты пока не блокируют', 'Деньги сейчас не списываются',
-]) assert(app.includes(snippet), `billing app UI invariant missing: ${snippet}`)
+]) assert(appCompact.includes(snippet.replace(/\s+/g, '')), `billing app UI invariant missing: ${snippet}`)
 
 console.log('Billing foundation test OK: catalogue, trial, current-month usage, DB enforcement and browser read-only boundaries verified')

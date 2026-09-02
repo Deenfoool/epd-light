@@ -33,7 +33,7 @@ export async function listBillingPaymentEvents(limit = 20): Promise<BillingPayme
     .order('created_at', { ascending: false })
     .limit(safeLimit)
   if (error) throw error
-  return (data ?? []) as BillingPaymentEventView[]
+  return (data ?? []) as unknown as BillingPaymentEventView[]
 }
 
 export function billingPaymentEventStatusLabel(status: BillingPaymentEventView['event_status']): string {
