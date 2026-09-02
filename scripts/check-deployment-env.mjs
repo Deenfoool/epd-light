@@ -38,6 +38,7 @@ const parsePostgresUrl = (name, raw, { requiredValue = true } = {}) => {
   }
 }
 
+const deploymentMode = required('EPD_DEPLOYMENT_MODE')
 const frontendUrl = httpsUrl('VITE_SUPABASE_URL')
 const frontendKey = required('VITE_SUPABASE_ANON_KEY')
 const authUrl = httpsUrl('EPD_AUTH_SUPABASE_URL')
@@ -48,6 +49,7 @@ const operatorMode = value('EPD_OPERATOR_MODE') || 'disabled'
 const provider = value('EPD_OPERATOR_PROVIDER') || 'none'
 const allowedOrigins = required('EPD_ALLOWED_ORIGINS')
 
+if (deploymentMode && deploymentMode !== 'production') errors.push('Production EPD_DEPLOYMENT_MODE must be production')
 if (authMode && authMode !== 'supabase') errors.push('Production EPD_GATEWAY_AUTH_MODE must be supabase')
 if (!['disabled', 'sandbox'].includes(operatorMode)) errors.push('EPD_OPERATOR_MODE must be disabled or sandbox')
 if (operatorMode === 'sandbox' && provider !== 'kontur') errors.push('Sandbox mode currently requires EPD_OPERATOR_PROVIDER=kontur')
@@ -144,6 +146,7 @@ if (errors.length) {
 }
 
 console.log('Deployment environment check OK')
+console.log(`- deployment mode: ${deploymentMode}`)
 console.log(`- auth: ${authMode}`)
 console.log(`- operator mode: ${operatorMode}`)
 console.log(`- provider: ${provider}`)
