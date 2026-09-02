@@ -71,6 +71,7 @@ run_node scripts/preflight-deploy.mjs
 run_node scripts/preflight-source.mjs
 run_node scripts/preflight-migrations.mjs
 run_node scripts/preflight-backup.mjs
+run_node scripts/preflight-privacy.mjs
 run_node scripts/preflight-billing.mjs
 run_node scripts/preflight-runtime.mjs
 run_node scripts/preflight.mjs
