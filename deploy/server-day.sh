@@ -10,7 +10,20 @@ if [ ! -f "$ENV_FILE" ]; then
   echo "Create it from .env.example and fill production values first." >&2
   exit 1
 fi
-
+if ! command -v git >/dev/null 2>&1; then
+  echo "ERROR: git is required for traceable production deployment" >&2
+  exit 1
+fi
+if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]; then
+  echo "ERROR: server-day must run from a git checkout" >&2
+  exit 1
+fi
+DIRTY="$(git status --porcelain --untracked-files=normal)"
+if [ -n "$DIRTY" ]; then
+  echo "ERROR: production checkout is dirty; commit/stash/remove local source changes before deployment" >&2
+  printf '%s\n' "$DIRTY" >&2
+  exit 1
+fi
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: docker is not installed" >&2
   exit 1
@@ -20,16 +33,18 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-BUILD_COMMIT="${EPD_BUILD_COMMIT:-}"
-if [ -z "$BUILD_COMMIT" ] && command -v git >/dev/null 2>&1; then
-  BUILD_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || true)"
-fi
-if ! printf '%s' "$BUILD_COMMIT" | grep -Eq '^[0-9a-fA-F]{7,64}$'; then
-  echo "ERROR: deployment requires a traceable git commit. Run from a git checkout or set EPD_BUILD_COMMIT explicitly." >&2
+BUILD_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+if ! printf '%s' "$BUILD_COMMIT" | grep -Eq '^[0-9a-fA-F]{40,64}$'; then
+  echo "ERROR: deployment requires a full traceable git commit" >&2
   exit 1
 fi
 BUILD_COMMIT="$(printf '%s' "$BUILD_COMMIT" | tr 'A-F' 'a-f')"
-BUILD_TIME="${EPD_BUILD_TIME:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+RELEASE="$(awk -F'"' '/^[[:space:]]*"version"[[:space:]]*:/{print $4; exit}' package.json)"
+if ! printf '%s' "$RELEASE" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+  echo "ERROR: package.json version is missing or invalid" >&2
+  exit 1
+fi
 
 run_node() {
   docker run --rm \
@@ -40,12 +55,14 @@ run_node() {
 }
 
 dc() {
+  EPD_RELEASE="$RELEASE" \
   EPD_BUILD_COMMIT="$BUILD_COMMIT" \
   EPD_BUILD_TIME="$BUILD_TIME" \
   docker compose --env-file "$ENV_FILE" "$@"
 }
 
 echo "== EPD Light server-day prechecks =="
+echo "Release: $RELEASE"
 echo "Deploy commit: $BUILD_COMMIT"
 echo "Build time: $BUILD_TIME"
 run_node scripts/check-deployment-env.mjs
@@ -112,6 +129,7 @@ VERSION="$(dc exec -T web wget -q -O - http://127.0.0.1:8080/api/system/version)
 for EXPECTED in \
   '"traceableBuild":true' \
   '"sensitiveValuesIncluded":false' \
+  "\"release\":\"$RELEASE\"" \
   "\"commit\":\"$BUILD_COMMIT\""
 do
   if ! printf '%s' "$VERSION" | grep -q "$EXPECTED"; then
@@ -178,8 +196,8 @@ printf '%s' "$HEADERS" | grep -qi 'X-Frame-Options: DENY' || { echo "ERROR: X-Fr
 printf '%s' "$HEADERS" | grep -qi 'X-Content-Type-Options: nosniff' || { echo "ERROR: nosniff header missing" >&2; exit 1; }
 
 echo "== Deployment started safely =="
-echo "Runtime commit verified: $BUILD_COMMIT"
-echo "Production migration registry exactly matches this checkout."
+echo "Runtime release/commit verified: $RELEASE @ $BUILD_COMMIT"
+echo "Production migration registry exactly matches this clean checkout."
 echo "A recent encrypted PostgreSQL backup passed checksum, decryption and pg_restore verification."
 echo "Supabase Auth JWKS and Data API billing foundation were reachable before launch."
 echo "Project HTTP is bound to 127.0.0.1:8080. Put an HTTPS reverse proxy in front of it before public access."
