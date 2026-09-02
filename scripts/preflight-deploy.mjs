@@ -57,7 +57,11 @@ const serverDay = await read('deploy', 'server-day.sh')
 requireAll('server-day.sh', serverDay, [
   'scripts/check-deployment-env.mjs',
   'scripts/preflight-runtime.mjs',
+  'scripts/test-build-info.mjs',
+  'scripts/test-dependency-check.mjs',
   'scripts/test-readiness.mjs',
+  'scripts/check-runtime-dependencies.mjs',
+  'Production dependency smoke check',
   'scripts/test-web-security.mjs',
   'scripts/test-operator-attempt-repository.mjs',
   'scripts/test-operator-attempt-client.mjs',
@@ -90,6 +94,27 @@ requireAll('runtime build info', buildInfo, [
 for (const forbidden of ['EPD_DATABASE_URL', 'EPD_KONTUR_ACCESS_TOKEN', 'EPD_BILLING_DATABASE_URL']) {
   if (buildInfo.includes(forbidden)) fail(`build info module must not read secret env: ${forbidden}`)
 }
+
+const dependencyCheck = await read('server', 'dependency-check.mjs')
+requireAll('runtime dependency check', dependencyCheck, [
+  'gatewayAuthConfigFromEnv',
+  'supabaseDocumentRepositoryConfigFromEnv',
+  '/auth/v1/.well-known/jwks.json',
+  '/rest/v1/billing_plans',
+  'auth_jwks_no_asymmetric_keys',
+  'data_api_billing_plans_missing',
+  'sensitiveValuesIncluded: false',
+  'safeDependencyFailure',
+])
+for (const forbidden of ['console.log', 'console.error', 'response.text()', 'JSON.stringify(env)', 'publicApiKey: repositoryConfig.publicApiKey']) {
+  if (dependencyCheck.includes(forbidden)) fail(`dependency check module may expose sensitive runtime details: ${forbidden}`)
+}
+const dependencyScript = await read('scripts', 'check-runtime-dependencies.mjs')
+requireAll('dependency smoke script', dependencyScript, [
+  'checkRuntimeDependencies',
+  'safeDependencyFailure',
+  'response bodies, URLs and credentials are intentionally not printed',
+])
 
 const backup = await read('deploy', 'backup-postgres.sh')
 requireAll('backup-postgres.sh', backup, [
@@ -188,7 +213,7 @@ requireAll('.env.example', envExample, [
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test', 'build-info:test', 'readiness:test', 'web-security:test']) {
+for (const script of ['deploy:server-day', 'deploy:dependencies:check', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test', 'build-info:test', 'dependency:test', 'readiness:test', 'web-security:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 if (pkg.dependencies?.pg !== '8.23.0') fail('root pg dependency must stay pinned to 8.23.0')
@@ -200,4 +225,4 @@ for (const [section, dependencies] of Object.entries({ dependencies: pkg.depende
   }
 }
 
-console.log('Deploy preflight OK: traceable runtime commit/version, production readiness endpoint, explicit production mode, CSP/header inheritance, safe journals, guarded migrations, billing fail-closed, loopback binding, HTTPS edge and encrypted recovery safeguards verified')
+console.log('Deploy preflight OK: private JWKS/Data API dependency smoke-check, traceable runtime commit/version, production readiness, CSP/header inheritance, safe journals, guarded migrations, billing fail-closed, loopback binding, HTTPS edge and encrypted recovery safeguards verified')
