@@ -63,8 +63,8 @@ export function buildOperatorActionIdentity({
 
 /**
  * Prevents concurrent duplicate external calls inside one gateway process.
- * This is intentionally only the first layer. Completed-action persistence lives
- * in public.operator_attempts and will be wired through a server-owned DB path.
+ * A second, optional persistent layer is implemented by the restricted
+ * public.operator_attempts repository and survives process restarts when configured.
  */
 export async function runInFlightOnce(identity, task) {
   const key = String(identity?.idempotencyKey || '')
@@ -95,5 +95,7 @@ export const OPERATOR_IDEMPOTENCY_POLICY = Object.freeze({
   xmlStoredByIdentityLayer: false,
   concurrentDuplicatesSharedPerProcess: true,
   completedPersistenceTable: 'public.operator_attempts',
-  completedPersistenceWired: false,
+  completedPersistenceRepositoryImplemented: true,
+  completedPersistenceRuntimeOptional: true,
+  completedPersistenceUsesRestrictedDbRole: true,
 })
