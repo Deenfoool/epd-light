@@ -21,9 +21,11 @@ const httpsUrl = (name, { allowLocal = false } = {}) => {
     return ''
   }
 }
-const postgresUrl = (name) => {
-  const raw = required(name)
-  if (!raw) return null
+const parsePostgresUrl = (name, raw, { requiredValue = true } = {}) => {
+  if (!raw) {
+    if (requiredValue) errors.push(`${name} is required`)
+    return null
+  }
   try {
     const url = new URL(raw)
     if (!['postgres:', 'postgresql:'].includes(url.protocol)) errors.push(`${name} must use postgres:// or postgresql://`)
@@ -93,7 +95,7 @@ if (operatorMode === 'sandbox') {
   warnings.push('Kontur access token is present while operator mode is disabled; remove it from hosts that do not need sandbox access')
 }
 
-const dbUrl = postgresUrl('EPD_DATABASE_URL')
+const dbUrl = parsePostgresUrl('EPD_DATABASE_URL', value('EPD_DATABASE_URL'))
 const backupPassphrase = required('EPD_BACKUP_PASSPHRASE')
 if (backupPassphrase && backupPassphrase.length < 20) errors.push('EPD_BACKUP_PASSPHRASE must contain at least 20 characters')
 if (dbUrl?.password && backupPassphrase) {
@@ -107,6 +109,19 @@ const backupDir = value('EPD_BACKUP_DIR') || '.backups'
 if (['/', '.', '..'].includes(backupDir)) errors.push('EPD_BACKUP_DIR must be a dedicated backup directory')
 const pgImage = value('EPD_POSTGRES_CLIENT_IMAGE') || 'postgres:17-alpine'
 if (/:(latest)$/i.test(pgImage) || !pgImage.includes(':')) errors.push('EPD_POSTGRES_CLIENT_IMAGE must pin an explicit image tag')
+
+const gatewayDbRaw = value('EPD_GATEWAY_DATABASE_URL')
+const gatewayDbUrl = parsePostgresUrl('EPD_GATEWAY_DATABASE_URL', gatewayDbRaw, { requiredValue: false })
+const gatewayDbRole = value('EPD_GATEWAY_DATABASE_ROLE') || 'epd_gateway_writer'
+if (!/^[a-z_][a-z0-9_]{0,62}$/.test(gatewayDbRole)) errors.push('EPD_GATEWAY_DATABASE_ROLE must be a safe PostgreSQL role name')
+if (gatewayDbRole !== 'epd_gateway_writer') warnings.push('Gateway writer role differs from the repository default; verify matching DB grants/policies')
+if (gatewayDbUrl && dbUrl) {
+  const normalizeDb = (u) => `${u.protocol}//${u.username}@${u.hostname}:${u.port || '5432'}${u.pathname}`
+  if (normalizeDb(gatewayDbUrl) === normalizeDb(dbUrl)) errors.push('EPD_GATEWAY_DATABASE_URL must use a separate restricted login, not EPD_DATABASE_URL/admin credential')
+}
+if (operatorMode === 'sandbox' && !gatewayDbUrl) warnings.push('Persistent operator-attempt journal is not configured; dedupe will not survive gateway restart')
+const attemptStaleMs = Number(value('EPD_OPERATOR_ATTEMPT_STALE_MS') || 300000)
+if (!Number.isFinite(attemptStaleMs) || attemptStaleMs < 60000 || attemptStaleMs > 3600000) errors.push('EPD_OPERATOR_ATTEMPT_STALE_MS must be between 60000 and 3600000')
 
 const restoreUrlRaw = value('EPD_RESTORE_TEST_DATABASE_URL')
 if (restoreUrlRaw) {
@@ -135,4 +150,5 @@ console.log(`- provider: ${provider}`)
 console.log(`- external operator limit: ${externalLimit}/${Math.round(rateWindow / 1000)}s`)
 console.log(`- allowed origins: ${allowedOrigins}`)
 console.log(`- encrypted database backups: configured, retention ${retention}d`)
+console.log(`- persistent operator journal: ${gatewayDbUrl ? 'configured' : 'not configured'}`)
 for (const warning of warnings) console.log(`- WARN: ${warning}`)
