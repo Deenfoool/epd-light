@@ -42,7 +42,9 @@ MVP SaaS для подготовки, проверки и хранения **ч�
 - `/api/system/version` — public-safe release/commit/build time запущенного gateway;
 - `/api/system/readiness` — технический baseline без утверждений о юридической/XSD/operator-production готовности;
 - production readiness требует traceable git commit/build time;
-- private dependency smoke-check проверяет реальный Supabase JWKS и Data API `billing_plans` без публикации URL/ключей/response body.
+- private dependency smoke-check проверяет реальный Supabase JWKS и Data API `billing_plans` без публикации URL/ключей/response body;
+- production deploy сверяет checkout и registry всех SQL-миграций по SHA-256;
+- production deploy требует свежий зашифрованный backup, который проходит checksum, decrypt и `pg_restore --list`.
 
 ### Биллинг foundation
 
@@ -108,6 +110,7 @@ EPD_DATA_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_ANON_OR_PUBLISHABLE_KEY
 EPD_ALLOWED_ORIGINS=https://epd.example.ru
 EPD_BILLING_PROVIDER=none
+EPD_BACKUP_MAX_AGE_HOURS=30
 ```
 
 `deploy/server-day.sh` сам получает текущий git commit, ставит UTC build time в Compose и после запуска сверяет `/api/system/version` с исходным checkout. Если commit нельзя определить, production deploy останавливается.
@@ -129,25 +132,37 @@ supabase/migrations/202609020004_billing_entitlement_function.sql
 supabase/migrations/202609020005_billing_payment_event_column_privileges.sql
 ```
 
-Production:
+Production migration flow:
 
 ```bash
 export EPD_MIGRATION_CONFIRM=APPLY_MIGRATIONS
 npm run db:migrate
 unset EPD_MIGRATION_CONFIRM
+npm run db:migrations:check -- .env.production
 ```
 
 Guarded runner делает encrypted backup до/после, хранит SHA-256 применённых migration-файлов и запрещает незаметно переписывать уже применённые миграции.
+
+`db:migrations:check` ничего не меняет в БД. Он требует, чтобы:
+
+- каждый локальный migration-файл был зарегистрирован в `public.epd_light_schema_migrations`;
+- SHA-256 совпадал;
+- число зарегистрированных миграций точно совпадало с checkout;
+- в production не было более новой миграции, отсутствующей в текущем коде.
+
+Последний пункт защищает от случайного запуска старого checkout поверх более новой схемы БД.
 
 ## Runtime checks
 
 Разные проверки имеют разный смысл:
 
 ```text
-GET /healthz                 -> процесс gateway жив
-GET /api/system/version      -> какой release/commit/build time реально запущен
-GET /api/system/readiness    -> безопасный технический configuration baseline
-npm run deploy:dependencies:check -> реальная доступность Supabase Auth JWKS + Data API/migrations
+GET /healthz                      -> процесс gateway жив
+GET /api/system/version           -> какой release/commit/build time реально запущен
+GET /api/system/readiness         -> безопасный технический configuration baseline
+npm run db:migrations:check -- .env.production -> код и production schema registry совпадают
+npm run backup:readiness -- .env.production     -> существует свежий реально читаемый encrypted backup
+npm run deploy:dependencies:check              -> реальная доступность Supabase Auth JWKS + Data API/migrations
 ```
 
 `/api/system/readiness` специально возвращает `technicalReadinessOnly=true` и `legalReadinessClaimed=false`.
@@ -236,10 +251,20 @@ Sandbox не выполняет signing/PostMessage.
 
 ## Backup/recovery
 
+Создание и ручная проверка:
+
 ```bash
 npm run backup:create
 npm run backup:verify -- /absolute/path/backup.dump.enc
 ```
+
+Production readiness:
+
+```bash
+npm run backup:readiness -- .env.production
+```
+
+`backup:readiness` находит самый свежий `epd-light-*.dump.enc`, требует `.sha256`, проверяет возраст по `EPD_BACKUP_MAX_AGE_HOURS` (по умолчанию 30 часов), затем реально выполняет SHA-256 verification, decrypt во временный файл и `pg_restore --list`. Plaintext-временный файл удаляется verifier'ом.
 
 Restore drill — только отдельная test/staging DB:
 
@@ -275,9 +300,11 @@ npm run kontur:generation:test
 npm run kontur:sandbox:test
 ```
 
-Production env с сетью:
+Production env / storage / network:
 
 ```bash
+npm run db:migrations:check -- .env.production
+npm run backup:readiness -- .env.production
 npm run deploy:dependencies:check
 ```
 
