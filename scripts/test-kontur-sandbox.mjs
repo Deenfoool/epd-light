@@ -88,7 +88,7 @@ assert(result.signed === false && result.sent === false, 'sandbox generation mus
 assert(/^[0-9a-f]{64}$/.test(result.idempotency?.idempotencyKey || ''), 'sandbox result must expose safe sha256 idempotency key')
 assert(/^[0-9a-f]{64}$/.test(result.idempotency?.requestFingerprint || ''), 'sandbox result must expose safe request fingerprint')
 assert(result.idempotency?.sourceRevision === row.updated_at, 'idempotency must bind to canonical documents.updated_at')
-assert(result.idempotency?.completedPersistenceWired === false, 'completed-attempt persistence must not be claimed yet')
+assert(result.idempotency?.completedPersistenceWired === false, 'persistence must not be claimed without writer repository')
 
 let concurrentExternalCalls = 0
 let releaseConcurrent
@@ -111,6 +111,50 @@ const concurrentResults = await Promise.all([concurrentA, concurrentB])
 assert(concurrentResults.filter((x) => x.idempotency.sharedInFlight).length === 1, 'one concurrent caller must share the in-flight external result')
 assert(concurrentResults[0].idempotency.idempotencyKey === concurrentResults[1].idempotency.idempotencyKey, 'concurrent callers must use the same action identity')
 
+let persistentState = null
+let persistentExternalCalls = 0
+const fakeAttemptRepository = {
+  status: { configured: true },
+  async claim({ userId: claimUser, documentId: claimDocument, identity }) {
+    if (persistentState?.status === 'succeeded') return { state: 'already_succeeded', attempt: persistentState }
+    persistentState = {
+      id: 'attempt-1', userId: claimUser, documentId: claimDocument,
+      requestFingerprint: identity.requestFingerprint, status: 'started',
+    }
+    return { state: 'claimed', attempt: persistentState }
+  },
+  async succeed(id) {
+    assert(id === 'attempt-1', 'persistent succeed must target claimed attempt')
+    persistentState = { ...persistentState, status: 'succeeded' }
+    return persistentState
+  },
+  async fail(id, safeCode) {
+    persistentState = { ...persistentState, id, status: 'failed', safeErrorCode: safeCode }
+    return persistentState
+  },
+}
+const persistentArgs = {
+  ...baseArgs,
+  attemptRepository: fakeAttemptRepository,
+  repositoryFetchImpl: async () => new Response(JSON.stringify([row]), { status: 200, headers: { 'content-type': 'application/json' } }),
+  konturFetchImpl: async () => {
+    persistentExternalCalls += 1
+    return new Response('<Файл ВерсФорм="5.01"/>', { status: 200, headers: { 'content-type': 'application/xml' } })
+  },
+}
+const persisted = await generateKonturSandboxTitleForDocument(persistentArgs)
+assert(persisted.idempotency.completedPersistenceWired === true, 'configured attempt repository must be reported as persistent')
+assert(persisted.persistence.persisted === true && persisted.persistence.status === 'succeeded', 'successful sandbox call must persist succeeded state')
+assert(persistentExternalCalls === 1, 'first persistent attempt must call operator once')
+let persistentDuplicateBlocked = false
+try {
+  await generateKonturSandboxTitleForDocument(persistentArgs)
+} catch (error) {
+  persistentDuplicateBlocked = error?.code === 'sandbox_already_generated'
+}
+assert(persistentDuplicateBlocked, 'successful persisted revision must block later duplicate external generation')
+assert(persistentExternalCalls === 1, 'persistent duplicate must be blocked before operator request')
+
 let crossAccountExternalCall = false
 let crossAccountHidden = false
 try {
@@ -126,4 +170,4 @@ assert(crossAccountHidden, 'cross-account document must be hidden as unavailable
 assert(crossAccountExternalCall === false, 'cross-account document must fail before Kontur request')
 assert(JSON.stringify(auth).includes('user-access-token') === false, 'verified user token must stay non-enumerable')
 
-console.log('Kontur sandbox test OK: documentId-only JWT/RLS flow, revision idempotency, concurrent dedupe and ownership verified')
+console.log('Kontur sandbox test OK: documentId-only JWT/RLS flow, revision idempotency, concurrent + persistent dedupe and ownership verified')
