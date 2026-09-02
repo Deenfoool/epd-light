@@ -1,57 +1,44 @@
 # Развёртывание ЭПД Лайт
 
+Этот runbook описывает **технический production baseline**. Он не утверждает юридическую готовность сервиса, соответствие XSD ФНС, готовность подписания или production-отправки через оператора ИС ЭПД.
+
 ## Режимы
 
-Проект разделяет три режима:
-
-1. **Demo/local** — `EPD_DEPLOYMENT_MODE=local`, localStorage или локальная разработка; auth может быть отключена только здесь и только при выключенном operator mode.
-2. **Production cloud** — `EPD_DEPLOYMENT_MODE=production`, Supabase/PostgreSQL + JWT/JWKS + private gateway, operator mode может оставаться `disabled`.
+1. **Demo/local** — `EPD_DEPLOYMENT_MODE=local`; auth может быть отключена только при `EPD_OPERATOR_MODE=disabled`.
+2. **Production cloud** — `EPD_DEPLOYMENT_MODE=production`, Supabase/PostgreSQL + JWT/JWKS + private gateway; operator mode может оставаться `disabled`.
 3. **Kontur sandbox** — production cloud + реальный `GenerateTitleXml`; signing и `PostMessage` всё равно запрещены.
 
-Ключевой runtime-инвариант: при `EPD_DEPLOYMENT_MODE=production` gateway **не стартует** с `EPD_GATEWAY_AUTH_MODE=disabled`, даже если `EPD_OPERATOR_MODE=disabled`.
+Production gateway сам отказывается стартовать без `EPD_GATEWAY_AUTH_MODE=supabase`. Billing отдельно fail-closed: `EPD_BILLING_PROVIDER=none`, пока не реализован конкретный verified payment adapter/webhook.
 
-Billing имеет отдельный fail-closed switch: `EPD_BILLING_PROVIDER` обязан оставаться `none`, пока не реализован и не проверен конкретный payment adapter/webhook.
+## 1. Подготовить `.env.production`
 
-## 1. Local/demo
+Начать с:
 
 ```bash
-npm install
-npm run preflight
-npm run dev
+cp .env.example .env.production
 ```
 
-Минимальный local env:
+Минимальные production-инварианты:
 
 ```env
-EPD_DEPLOYMENT_MODE=local
-EPD_OPERATOR_MODE=disabled
-EPD_GATEWAY_AUTH_MODE=disabled
-EPD_BILLING_PROVIDER=none
-```
-
-GitHub Pages — только UI-стенд. Реальные персональные данные туда не помещаются.
-
-## 2. Production data/auth prerequisites
-
-```env
+EPD_RELEASE=0.1.0
 EPD_DEPLOYMENT_MODE=production
-
-VITE_SUPABASE_URL=https://YOUR_DATA_HOST
-VITE_SUPABASE_ANON_KEY=PUBLIC_KEY
-
 EPD_GATEWAY_AUTH_MODE=supabase
 EPD_AUTH_SUPABASE_URL=https://YOUR_DATA_HOST
-EPD_AUTH_AUDIENCE=authenticated
-
 EPD_DATA_SUPABASE_URL=https://YOUR_DATA_HOST
-EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_KEY
-
+EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_ANON_OR_PUBLISHABLE_KEY
+EPD_ALLOWED_ORIGINS=https://epd.example.ru
+EPD_OPERATOR_PROVIDER=none
+EPD_OPERATOR_MODE=disabled
 EPD_BILLING_PROVIDER=none
+EPD_BACKUP_MAX_AGE_HOURS=30
 ```
 
-Frontend/Data API key — публичный anon/publishable key, **не `service_role`**.
+`VITE_*` содержит только публичную frontend-конфигурацию. В `VITE_*` запрещены operator token, DB passwords, backup passphrase, `service_role`, private keys и материалы КЭП.
 
-Актуальные миграции — **8 файлов**:
+## 2. Восемь SQL-миграций
+
+Текущий набор:
 
 ```text
 202609010001_init.sql
@@ -64,7 +51,7 @@ Frontend/Data API key — публичный anon/publishable key, **не `servi
 202609020005_billing_payment_event_column_privileges.sql
 ```
 
-Production миграции применяются guarded runner'ом:
+Применение выполняется только guarded runner'ом:
 
 ```bash
 export EPD_MIGRATION_CONFIRM=APPLY_MIGRATIONS
@@ -72,286 +59,72 @@ npm run db:migrate
 unset EPD_MIGRATION_CONFIRM
 ```
 
-Runner делает encrypted backup до/после, хранит SHA-256 уже применённых migration-файлов и останавливается при попытке переписать старую миграцию задним числом.
+Runner:
 
-RLS `documents_own` остаётся авторитетной:
+- делает encrypted backup до изменений;
+- создаёт/использует `public.epd_light_schema_migrations`;
+- сохраняет SHA-256 каждого применённого файла;
+- отказывается принимать изменённую задним числом migration;
+- применяет SQL через `--single-transaction`;
+- делает второй encrypted backup после изменений.
 
-```text
-auth.uid() = user_id
-```
-
-## 3. Production env-check
-
-```bash
-cp .env.example .env.production
-```
-
-Для production обязательно поменять:
-
-```env
-EPD_DEPLOYMENT_MODE=production
-EPD_GATEWAY_AUTH_MODE=supabase
-```
-
-Проверка:
+После применения обязательно:
 
 ```bash
-set -a
-. ./.env.production
-set +a
-npm run deploy:check
+npm run db:migrations:check -- .env.production
 ```
 
-Checker останавливает запуск при опасных настройках, включая:
+Этот checker **ничего не изменяет**. Он останавливает deploy, если:
 
-- `EPD_DEPLOYMENT_MODE != production`;
-- gateway auth не `supabase`;
-- HTTP вместо HTTPS;
-- пустой Data API public key;
-- `service_role` вместо public key;
-- wildcard CORS;
-- server secret/database URL в `VITE_*`;
-- sandbox без Kontur BoxId/token;
-- невалидные rate limits;
-- небезопасные backup/restore настройки;
-- использование admin DB credential как runtime gateway credential;
-- повторное использование operator DB credential как billing credential;
-- небезопасные restricted DB role names;
-- `EPD_BILLING_PROVIDER != none` до появления verified provider adapter.
+- migration отсутствует в production registry;
+- SHA-256 не совпадает с checkout;
+- в БД есть дополнительная зарегистрированная migration, которой нет в текущем checkout.
 
-```bash
-npm run deploy:env:test
-```
+Последняя проверка защищает от случайного rollback старого кода поверх более новой схемы.
 
-## 4. Restricted operator journal DB login
+## 3. Backup readiness
 
-Persistent idempotency для внешних operator-вызовов опционально использует отдельный runtime PostgreSQL login:
-
-```env
-EPD_GATEWAY_DATABASE_URL=postgresql://epd_gateway:PASSWORD@DB_HOST:5432/DB_NAME
-EPD_GATEWAY_DATABASE_ROLE=epd_gateway_writer
-EPD_OPERATOR_ATTEMPT_STALE_MS=300000
-```
-
-`epd_gateway_writer` создаётся как **NOLOGIN capability-role** пятой миграцией. Реальный LOGIN создаётся администратором БД отдельно и получает membership в этой роли.
-
-Gateway в каждой транзакции выполняет `SET LOCAL ROLE epd_gateway_writer`. Роль имеет только необходимые права на `operator_attempts`.
-
-Без `EPD_GATEWAY_DATABASE_URL` sandbox остаётся работоспособным, но completed-attempt dedupe переживает только текущий gateway-процесс.
-
-## 5. Billing foundation и restricted billing login
-
-Billing foundation создаёт тарифы, trial, subscription entitlement, monthly usage и database quota trigger.
-
-По умолчанию:
-
-```text
-billing_settings.enforcement_enabled = false
-EPD_BILLING_PROVIDER=none
-```
-
-Шестая миграция создаёт metadata-only `billing_payment_events` и NOLOGIN capability-role `epd_billing_writer`.
-
-Для будущего verified webhook worker предусмотрен отдельный LOGIN:
-
-```env
-EPD_BILLING_DATABASE_URL=postgresql://epd_billing:PASSWORD@DB_HOST:5432/DB_NAME
-EPD_BILLING_DATABASE_ROLE=epd_billing_writer
-```
-
-Этот credential не должен совпадать ни с `EPD_DATABASE_URL`, ни с `EPD_GATEWAY_DATABASE_URL`.
-
-Седьмая миграция убирает прямой `UPDATE subscriptions` и `UPDATE billing_payment_events` у runtime billing-role. Активация entitlement разрешена только через:
-
-```text
-public.apply_verified_billing_entitlement(...)
-```
-
-SECURITY DEFINER функция атомарно проверяет event/user/status/plan/billing period, а затем делает `subscription -> active` и `event -> applied`.
-
-Восьмая миграция ограничивает browser history ещё и на уровне **column privileges**. Authenticated role может SELECT только:
-
-```text
-provider
- event_type
- event_status
- plan_code
- amount_kopecks
- currency
- safe_error_code
- created_at
- processed_at
-```
-
-Даже прямой Data API запрос под пользовательским JWT не получает `id`, `user_id`, `provider_event_id` или `payload_sha256`. RLS дополнительно ограничивает строки `auth.uid() = user_id`.
-
-Реальный checkout/webhook всё ещё отсутствует.
-
-## 6. Docker Compose
-
-Web публикуется только на loopback:
-
-```text
-127.0.0.1:8080 -> web container
-```
-
-Gateway `8787` наружу не публикуется.
-
-```bash
-docker compose --env-file .env.production up -d --build
-```
-
-Compose передаёт gateway deployment/operator/billing env, но заполненный billing DB credential сам по себе **не включает** платежи.
-
-## 7. Server-day helper
-
-```bash
-sh deploy/server-day.sh .env.production
-```
-
-Скрипт до старта Docker проверяет deployment/runtime/billing preflight, RLS repositories, restricted DB boundaries, idempotency, billing foundation/payment/browser boundary, web security и operator sandbox.
-
-После старта он:
-
-- ждёт `/healthz`;
-- читает `/api/operator/capabilities` и требует `externalSendEnabled=false`;
-- читает `/api/billing/capabilities` и требует одновременно:
-
-```text
-provider = none
-checkoutEnabled = false
-webhookEnabled = false
-realMoneyEnabled = false
-successRedirectAuthoritative = false
-directRuntimeSubscriptionUpdateAllowed = false
-entitlementDatabaseFunctionRequired = true
-```
-
-- проверяет CSP, X-Frame-Options и nosniff на реальном web container.
-
-Если хотя бы один payment-инвариант неожиданно меняется, `server-day` останавливается с ошибкой.
-
-Скрипт не устанавливает Docker, не меняет firewall/DNS и не применяет SQL автоматически.
-
-## 8. HTTPS reverse proxy и web security
-
-```text
-Internet
-  -> :443 TLS reverse proxy
-  -> 127.0.0.1:8080 project nginx
-  -> frontend or /api/*
-  -> private gateway:8787
-```
-
-Шаблон:
-
-```text
-deploy/Caddyfile.example
-```
-
-`EPD_ALLOWED_ORIGINS` — только точный HTTPS origin:
-
-```env
-EPD_ALLOWED_ORIGINS=https://epd.example.ru
-```
-
-Project nginx/Caddy policy включает CSP, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy, Permissions-Policy и COOP. CSP разрешает `connect-src 'self' https: wss:` для Supabase/Auth API и запрещает inline scripts/objects/frame ancestors.
-
-```bash
-npm run web-security:test
-```
-
-## 9. Auth/RLS/billing smoke test
-
-Двумя тестовыми аккаунтами:
-
-1. A создаёт документ;
-2. B не видит документ A;
-3. Data API под JWT B не возвращает документ A даже по известному UUID;
-4. operator API без Bearer получает `401`;
-5. валидный JWT работает;
-6. чужой `documentId` не доходит до operator API;
-7. browser JWT не может писать `operator_attempts`;
-8. browser JWT не может менять `subscriptions`/usage/payment events;
-9. browser payment history возвращает только разрешённые колонки своего аккаунта;
-10. прямой запрос `provider_event_id`/`payload_sha256` под browser JWT отклоняется правами БД;
-11. restricted gateway DB login не имеет административных прав;
-12. restricted billing DB login не имеет прямого UPDATE к subscription/payment events;
-13. `/api/billing/capabilities` сообщает real money disabled;
-14. `EPD_BILLING_PROVIDER=none`.
-
-## 10. Local preview
-
-При выключенном operator mode:
-
-```text
-POST /api/operator/preflight
-POST /api/operator/kontur/userdata-preview
-```
-
-Они не вызывают внешний operator API.
-
-## 11. Kontur sandbox
-
-```env
-EPD_DEPLOYMENT_MODE=production
-EPD_OPERATOR_PROVIDER=kontur
-EPD_OPERATOR_MODE=sandbox
-EPD_GATEWAY_AUTH_MODE=supabase
-EPD_KONTUR_BOX_ID=...
-EPD_KONTUR_ACCESS_TOKEN=...
-EPD_EXTERNAL_RATE_LIMIT_MAX=10
-```
-
-```text
-Browser: {documentId}
- -> JWT/JWKS
- -> Supabase Data API under USER JWT
- -> RLS
- -> canonical documents row
- -> ownership check
- -> SHA-256 action identity
- -> persistent claim (если настроен)
- -> in-process duplicate collapse
- -> UserDataXml
- -> Kontur GenerateTitleXml
- -> journal succeeded/failed
-```
-
-Успешный sandbox результат не подписан и не отправлен. Повтор уже успешно обработанной той же revision при persistent journal блокируется до второго внешнего вызова.
-
-## 12. Запрещено
-
-- production `/api/operator/send`;
-- `PostMessage`;
-- signing без отдельного signing flow;
-- автоматический статус «отправлен» от пользовательского клика;
-- `service_role` в browser/operator user flow;
-- operator/payment token/DB password в `VITE_*`;
-- XML/JSON документа в application logs;
-- raw payment webhook/card data в billing ledger;
-- использование admin DB credential в runtime;
-- прямое изменение subscription пользователем или billing runtime role;
-- включение реальных денег до verified provider adapter.
-
-## 13. Backup/recovery
-
-Production checker требует:
+Production backup-конфигурация:
 
 ```env
 EPD_DATABASE_URL=postgresql://ADMIN_USER:PASSWORD@DB_HOST:5432/DB_NAME
 EPD_BACKUP_DIR=.backups
 EPD_BACKUP_RETENTION_DAYS=14
+EPD_BACKUP_MAX_AGE_HOURS=30
 EPD_BACKUP_PASSPHRASE=LONG_RANDOM_SECRET_DIFFERENT_FROM_DB_PASSWORD
 EPD_POSTGRES_CLIENT_IMAGE=postgres:17-alpine
 ```
 
+Создание:
+
 ```bash
 npm run backup:create
+```
+
+Проверка конкретного архива:
+
+```bash
 npm run backup:verify -- /absolute/path/epd-light-....dump.enc
 ```
 
-Restore drill — только отдельная test/staging DB:
+Production gate:
+
+```bash
+npm run backup:readiness -- .env.production
+```
+
+`backup:readiness` требует свежий `epd-light-*.dump.enc`, SHA-256 sidecar и возраст не больше `EPD_BACKUP_MAX_AGE_HOURS`. Затем реально выполняются:
+
+```text
+SHA-256 verification
+ -> AES-256/PBKDF2 decrypt во временный файл
+ -> pg_restore --list
+ -> удаление plaintext temp
+```
+
+Backup на том же VPS — только первый уровень. Нужна отдельная offsite-копия и отдельное хранение passphrase.
+
+Restore drill выполняется только в disposable test/staging DB:
 
 ```bash
 export EPD_RESTORE_TEST_CONFIRM=RESTORE_TEST_ONLY
@@ -359,57 +132,241 @@ npm run backup:restore:test -- /absolute/path/epd-light-....dump.enc
 unset EPD_RESTORE_TEST_CONFIRM
 ```
 
-Encrypted backup на том же VPS — только первый уровень. Копия должна уходить отдельно от production VPS; passphrase хранится отдельно.
+## 4. Restricted runtime DB logins
 
-Подробнее: [`BACKUP-RECOVERY.md`](BACKUP-RECOVERY.md).
+### Operator journal
 
-## 14. Server-day checklist
+```env
+EPD_GATEWAY_DATABASE_URL=postgresql://epd_gateway:PASSWORD@DB_HOST:5432/DB_NAME
+EPD_GATEWAY_DATABASE_ROLE=epd_gateway_writer
+EPD_OPERATOR_ATTEMPT_STALE_MS=300000
+```
 
-Перед открытием домена:
+`epd_gateway_writer` — NOLOGIN capability-role. Runtime LOGIN создаётся отдельно и получает membership. Credential не должен совпадать с admin `EPD_DATABASE_URL`.
+
+### Billing worker boundary
+
+```env
+EPD_BILLING_DATABASE_URL=postgresql://epd_billing:PASSWORD@DB_HOST:5432/DB_NAME
+EPD_BILLING_DATABASE_ROLE=epd_billing_writer
+```
+
+Этот credential должен отличаться и от admin DB, и от operator journal login. Само наличие credential **не включает оплату**.
+
+Billing runtime не имеет прямого `UPDATE subscriptions`. Entitlement может быть активирован только через DB-функцию `public.apply_verified_billing_entitlement(...)`, которая требует уже verified payment event.
+
+## 5. Browser DB boundary
+
+RLS для документов остаётся авторитетной:
+
+```text
+auth.uid() = user_id
+```
+
+Browser JWT:
+
+- не может писать `operator_attempts`;
+- не может менять `subscriptions`/usage/payment events;
+- payment history читает только свои строки;
+- column privileges не дают прочитать `id`, `user_id`, `provider_event_id`, `payload_sha256`.
+
+## 6. Private dependency smoke-check
+
+Перед Docker launch:
+
+```bash
+npm run deploy:dependencies:check
+```
+
+Production checker проверяет по сети:
+
+```text
+Supabase /auth/v1/.well-known/jwks.json
+ -> есть asymmetric signing key
+
+Supabase /rest/v1/billing_plans
+ -> Data API доступен
+ -> billing foundation видна
+```
+
+В error output намеренно нет Supabase URL, API key и response body.
+
+## 7. Server-day
+
+Основной запуск:
+
+```bash
+sh deploy/server-day.sh .env.production
+```
+
+Порядок fail-closed gate'ов до Docker build:
+
+```text
+env/security preflight
+ -> migration static preflight
+ -> backup static preflight
+ -> billing/runtime tests
+ -> exact production migration registry + SHA-256
+ -> fresh encrypted backup readiness
+ -> Supabase JWKS/Data API network smoke
+ -> docker compose config
+ -> Docker build/start
+```
+
+После запуска:
+
+```text
+/healthz
+ -> /api/system/version
+ -> runtime commit == checkout commit
+ -> /api/operator/capabilities: externalSendEnabled=false
+ -> /api/billing/capabilities: provider=none, checkout/webhook/realMoney=false
+ -> /api/system/readiness: productionBaselineReady=true
+ -> CSP/X-Frame-Options/nosniff runtime headers
+```
+
+`/api/system/readiness` специально сообщает:
+
+```text
+technicalReadinessOnly=true
+legalReadinessClaimed=false
+sensitiveValuesIncluded=false
+```
+
+То есть зелёный technical baseline не означает юридическую/XSD/operator-production готовность.
+
+## 8. Build traceability
+
+`server-day` получает текущий git commit и UTC build time и передаёт их gateway:
+
+```text
+EPD_RELEASE
+EPD_BUILD_COMMIT
+EPD_BUILD_TIME
+```
+
+После запуска `/api/system/version` обязан вернуть тот же commit. Если checkout нельзя идентифицировать либо container сообщает другой commit — deployment останавливается.
+
+## 9. Docker/network
+
+Project web публикуется только на loopback:
+
+```text
+127.0.0.1:8080 -> web container
+```
+
+Gateway `8787` наружу не публикуется.
+
+Целевая схема:
+
+```text
+Internet
+ -> :443 TLS reverse proxy
+ -> 127.0.0.1:8080 project nginx
+ -> frontend or /api/*
+ -> private gateway:8787
+```
+
+Шаблон Caddy:
+
+```text
+deploy/Caddyfile.example
+```
+
+Firewall не должен публиковать `8080` или `8787` в Internet.
+
+## 10. Web security
+
+Project nginx/Caddy включает CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, Referrer-Policy, Permissions-Policy и COOP.
+
+Проверка:
+
+```bash
+npm run web-security:test
+```
+
+`server-day` дополнительно проверяет headers на реально запущенном web container.
+
+## 11. Operator sandbox
+
+Только после получения sandbox credentials:
+
+```env
+EPD_OPERATOR_PROVIDER=kontur
+EPD_OPERATOR_MODE=sandbox
+EPD_KONTUR_BOX_ID=...
+EPD_KONTUR_ACCESS_TOKEN=...
+```
+
+Flow:
+
+```text
+Browser {documentId}
+ -> JWT/JWKS
+ -> Supabase Data API under USER JWT
+ -> RLS
+ -> canonical documents row
+ -> ownership
+ -> SHA-256 idempotency
+ -> optional persistent claim
+ -> UserDataXml
+ -> Kontur GenerateTitleXml
+ -> metadata-only journal
+```
+
+Sandbox не подписывает документ и не вызывает `PostMessage`. Production `/api/operator/send` остаётся 503.
+
+## 12. Billing
+
+До реализации конкретного провайдера обязательны:
+
+```text
+EPD_BILLING_PROVIDER=none
+checkoutEnabled=false
+webhookEnabled=false
+realMoneyEnabled=false
+successRedirectAuthoritative=false
+```
+
+Success redirect никогда не активирует entitlement. Будущий payment adapter должен сначала verify server-to-server event, затем записать verified ledger event и только потом вызвать DB entitlement function.
+
+## 13. Smoke-test двумя аккаунтами
+
+Перед пилотом:
+
+1. A создаёт документ.
+2. B не видит документ A.
+3. JWT B не получает документ A даже по известному UUID.
+4. Operator API без Bearer получает 401.
+5. Чужой `documentId` не доходит до operator API.
+6. Browser не может писать operator/payment journals.
+7. Browser не может менять subscription/usage.
+8. Запрос скрытых payment columns отклоняется правами БД.
+9. Restricted operator/billing logins не имеют административных прав.
+
+## 14. Checklist перед открытием домена
 
 - [ ] `EPD_DEPLOYMENT_MODE=production`;
+- [ ] `EPD_GATEWAY_AUTH_MODE=supabase`;
 - [ ] `EPD_BILLING_PROVIDER=none`;
 - [ ] `npm run preflight`;
-- [ ] `npm run deploy:env:test`;
-- [ ] `npm run deploy:check`;
-- [ ] `npm run web-security:test`;
-- [ ] `npm run audit:test`;
-- [ ] `npm run authorization:test`;
-- [ ] `npm run repository:test`;
-- [ ] `npm run attempt-repository:test`;
-- [ ] `npm run attempt-client:test`;
-- [ ] `npm run idempotency:test`;
-- [ ] `npm run billing:test`;
-- [ ] `npm run billing-payment:test`;
-- [ ] `npm run billing-payment-client:test`;
-- [ ] `npm run billing-env:test`;
-- [ ] `npm run rate-limit:test`;
-- [ ] `npm run gateway:test`;
-- [ ] `npm run auth:test`;
-- [ ] `npm run gateway:auth:test`;
-- [ ] `npm run kontur:userdata:test`;
-- [ ] `npm run kontur:generation:test`;
-- [ ] `npm run kontur:sandbox:test`;
-- [ ] `npm run build`;
-- [ ] все 8 SQL-миграций применены guarded runner'ом;
-- [ ] RLS проверена двумя аккаунтами;
-- [ ] restricted gateway DB login создан отдельно от admin login;
-- [ ] billing DB login, если настроен заранее, отдельный от admin/operator login;
-- [ ] browser не может писать operator/payment journals;
-- [ ] browser payment history ограничена column privileges;
-- [ ] web доступен только через `127.0.0.1:8080`;
-- [ ] HTTPS работает;
-- [ ] CSP/security headers подтверждены runtime-проверкой;
-- [ ] Auth redirect URLs ограничены production доменом;
-- [ ] firewall не публикует `8080/8787`;
-- [ ] encrypted backup создан и проверен;
-- [ ] backup скопирован вне VPS;
+- [ ] все 8 миграций применены guarded runner'ом;
+- [ ] `npm run db:migrations:check -- .env.production`;
+- [ ] `npm run backup:readiness -- .env.production`;
+- [ ] backup скопирован offsite;
 - [ ] restore drill выполнен;
-- [ ] `/api/billing/capabilities` fail-closed;
+- [ ] `npm run deploy:dependencies:check`;
+- [ ] `npm run build`;
+- [ ] RLS проверена двумя аккаунтами;
+- [ ] web слушает только `127.0.0.1:8080`;
+- [ ] HTTPS работает;
+- [ ] firewall не публикует `8080/8787`;
+- [ ] runtime commit совпадает с checkout;
+- [ ] `/api/system/readiness` даёт `productionBaselineReady=true`;
 - [ ] `externalSendEnabled=false`;
 - [ ] `PostMessage` отсутствует;
-- [ ] реальный payment checkout/webhook отсутствует до отдельного готового adapter.
+- [ ] billing checkout/webhook/real money отсутствуют.
 
 ## Контур данных РФ
 
-Production-размещение БД, backend, логов и backups строится отдельно от GitHub/demo с учётом фактического состава данных и применимых требований. Целевой production-контур проекта — в РФ; GitHub хранит исходный код, но не пользовательские документы/ПД/секреты.
+Production data/auth/backend/logs/backups проектируются отдельно от GitHub/demo. Целевой production-контур — в РФ; GitHub хранит исходный код, но не пользовательские документы, ПД и server secrets.
