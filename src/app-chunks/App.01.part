@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Archive, ArrowLeft, ArrowRight, Building2, Check, ChevronRight, ClipboardCheck, Copy,
+  Archive, ArrowLeft, ArrowRight, Building2, Check, ChevronRight, ClipboardCheck, Copy, CreditCard,
   Database, Download, FileJson, FileText, Home, Import, LayoutDashboard, LogOut, Menu,
   MoreHorizontal, Package, Plus, Printer, RefreshCw, Save, Search, Send, Settings, ShieldAlert,
   Truck, UserRound, Users, X, Trash2
 } from 'lucide-react'
-import type { Company, DocumentRow, Driver, EtrnData, Party, Profile, RussianAddressDraft, Vehicle } from './types'
+import type { BillingState, Company, DocumentRow, Driver, EtrnData, Party, Profile, RussianAddressDraft, Vehicle } from './types'
 import { cargoTotals, emptyCargo, emptyRussianAddress, exportJson, isReady, newDoc, normalizeEtrn, operatorReadiness, statusLabel, validateEtrn, validGuid, validInn } from './etrn'
 import { buildOperatorDraft } from './operator-draft'
 import { gatewayFetch } from './gateway'
+import { billingRemainingDocuments, billingStatusLabel, getBillingState } from './billing'
 import {
   cloudEnabled, deleteCompany, deleteDocument, deleteDriver, deleteVehicle, getProfile, getSessionEmail,
   listCompanies, listDocuments, listDrivers, listVehicles, saveCompany, saveDocument, saveDriver,
