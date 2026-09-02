@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { auditErrorCode, writeGatewayAudit } from './audit.mjs'
 import { GATEWAY_AUTH_POLICY, assertGatewayAuthConfig, authenticateGatewayRequest, gatewayAuthConfigFromEnv } from './auth.mjs'
 import { EXTERNAL_OPERATOR_AUTHORIZATION_POLICY } from './authorization.mjs'
+import { billingConfigFromEnv, billingConfigStatus, billingPublicCapabilities } from './billing.mjs'
 import { authenticatedRateKey, consumeRateLimit, rateLimitConfigFromEnv, rateLimitHeaders, requestNetworkKey } from './rate-limit.mjs'
 import { konturConfigFromEnv, konturConfigStatus, konturPublicCapabilities } from './providers/kontur.mjs'
 import { KONTUR_USERDATA_PREVIEW_CONTRACT, buildKonturT1UserDataXml, validateKonturT1Candidate } from './providers/kontur-userdata.mjs'
@@ -29,6 +30,9 @@ const maxBodyBytes = Number(process.env.EPD_MAX_BODY_BYTES || 512 * 1024)
 if (!['disabled', 'sandbox'].includes(operatorMode)) throw new Error(`Unsupported EPD_OPERATOR_MODE: ${operatorMode}`)
 if (operatorMode === 'sandbox' && provider !== 'kontur') throw new Error('Sandbox operator mode currently requires EPD_OPERATOR_PROVIDER=kontur')
 const authConfig = assertGatewayAuthConfig(gatewayAuthConfigFromEnv(), operatorMode)
+const billingConfig = billingConfigFromEnv()
+const billingStatus = billingConfigStatus(billingConfig)
+if (billingStatus.errors.length) throw new Error(`Unsupported EPD_BILLING_PROVIDER: ${billingConfig.provider}`)
 const rateConfig = rateLimitConfigFromEnv()
 const repositoryConfig = supabaseDocumentRepositoryConfigFromEnv()
 const repositoryStatus = supabaseDocumentRepositoryStatus(repositoryConfig)
@@ -190,6 +194,16 @@ const server = createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
     respond(200, { ok: true, service: 'epd-light-operator-gateway', requestId })
+    return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/billing/capabilities') {
+    respond(200, {
+      service: 'epd-light-billing-boundary',
+      ...billingPublicCapabilities(billingConfig),
+      message: 'Payment provider is fail-closed. Checkout/webhook and real money remain disabled until a verified provider adapter is implemented.',
+      requestId,
+    })
     return
   }
 
@@ -403,5 +417,5 @@ server.headersTimeout = 10_000
 server.keepAliveTimeout = 5_000
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`EPD Light operator gateway listening on :${port}; provider=${provider}; mode=${operatorMode}; auth=${authConfig.mode}; externalSendEnabled=false`)
+  console.log(`EPD Light gateway listening on :${port}; operator=${provider}/${operatorMode}; billing=${billingConfig.provider}; auth=${authConfig.mode}; externalSendEnabled=false; realMoneyEnabled=false`)
 })
