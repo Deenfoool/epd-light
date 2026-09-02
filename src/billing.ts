@@ -63,3 +63,14 @@ export function billingRemainingDocuments(state: BillingState): number | null {
   if (limit == null) return null
   return Math.max(0, limit - Number(state.usage?.documents_created || 0))
 }
+
+export function billingErrorMessage(error: unknown): string {
+  const raw = String((error as any)?.message || (error as any)?.details || error || '')
+  if (raw.includes('billing_document_limit_reached')) return 'Месячный лимит новых черновиков исчерпан. Откройте «Тариф и лимиты».'
+  if (raw.includes('billing_trial_expired')) return 'Пробный период закончился. Для создания новых черновиков потребуется активный тариф.'
+  if (raw.includes('billing_period_expired')) return 'Оплаченный период закончился. Обновите подписку перед созданием нового черновика.'
+  if (raw.includes('billing_subscription_inactive')) return 'Подписка не активна. Откройте «Тариф и лимиты».'
+  if (raw.includes('billing_subscription_missing')) return 'Не удалось определить тариф аккаунта. Обратитесь в поддержку.'
+  if (raw.includes('billing_user_mismatch')) return 'База отклонила создание документа из-за несоответствия владельца.'
+  return raw || 'Не удалось выполнить операцию'
+}
