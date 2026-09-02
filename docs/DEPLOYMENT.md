@@ -51,7 +51,7 @@ EPD_BILLING_PROVIDER=none
 
 Frontend/Data API key — публичный anon/publishable key, **не `service_role`**.
 
-Актуальные миграции — **7 файлов**:
+Актуальные миграции — **8 файлов**:
 
 ```text
 202609010001_init.sql
@@ -61,6 +61,7 @@ Frontend/Data API key — публичный anon/publishable key, **не `servi
 202609020002_gateway_writer_role.sql
 202609020003_billing_payment_events.sql
 202609020004_billing_entitlement_function.sql
+202609020005_billing_payment_event_column_privileges.sql
 ```
 
 Production миграции применяются guarded runner'ом:
@@ -166,17 +167,23 @@ EPD_BILLING_DATABASE_ROLE=epd_billing_writer
 public.apply_verified_billing_entitlement(...)
 ```
 
-SECURITY DEFINER функция атомарно проверяет:
+SECURITY DEFINER функция атомарно проверяет event/user/status/plan/billing period, а затем делает `subscription -> active` и `event -> applied`.
 
-- существование payment event;
-- совпадение user;
-- `event_status='verified'`;
-- совпадение plan;
-- валидный billing period;
+Восьмая миграция ограничивает browser history ещё и на уровне **column privileges**. Authenticated role может SELECT только:
 
-и только затем делает `subscription -> active` и `event -> applied`.
+```text
+provider
+ event_type
+ event_status
+ plan_code
+ amount_kopecks
+ currency
+ safe_error_code
+ created_at
+ processed_at
+```
 
-Browser может только читать свои safe payment metadata. Provider event id, payload hash, raw webhook и карточные данные UI не запрашивает.
+Даже прямой Data API запрос под пользовательским JWT не получает `id`, `user_id`, `provider_event_id` или `payload_sha256`. RLS дополнительно ограничивает строки `auth.uid() = user_id`.
 
 Реальный checkout/webhook всё ещё отсутствует.
 
@@ -202,25 +209,27 @@ Compose передаёт gateway deployment/operator/billing env, но запо�
 sh deploy/server-day.sh .env.production
 ```
 
-Скрипт до старта Docker проверяет:
-
-1. Docker/Compose;
-2. production env и billing env;
-3. deploy/runtime/billing preflight;
-4. Supabase RLS repository;
-5. restricted operator-attempt repository;
-6. read-only operator journal client;
-7. idempotency;
-8. billing foundation/payment/server/browser boundaries;
-9. web security headers policy;
-10. operator sandbox boundary.
+Скрипт до старта Docker проверяет deployment/runtime/billing preflight, RLS repositories, restricted DB boundaries, idempotency, billing foundation/payment/browser boundary, web security и operator sandbox.
 
 После старта он:
 
 - ждёт `/healthz`;
-- читает `/api/operator/capabilities`;
-- требует `externalSendEnabled=false`;
+- читает `/api/operator/capabilities` и требует `externalSendEnabled=false`;
+- читает `/api/billing/capabilities` и требует одновременно:
+
+```text
+provider = none
+checkoutEnabled = false
+webhookEnabled = false
+realMoneyEnabled = false
+successRedirectAuthoritative = false
+directRuntimeSubscriptionUpdateAllowed = false
+entitlementDatabaseFunctionRequired = true
+```
+
 - проверяет CSP, X-Frame-Options и nosniff на реальном web container.
+
+Если хотя бы один payment-инвариант неожиданно меняется, `server-day` останавливается с ошибкой.
 
 Скрипт не устанавливает Docker, не меняет firewall/DNS и не применяет SQL автоматически.
 
@@ -248,8 +257,6 @@ EPD_ALLOWED_ORIGINS=https://epd.example.ru
 
 Project nginx/Caddy policy включает CSP, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy, Permissions-Policy и COOP. CSP разрешает `connect-src 'self' https: wss:` для Supabase/Auth API и запрещает inline scripts/objects/frame ancestors.
 
-Проверка:
-
 ```bash
 npm run web-security:test
 ```
@@ -266,10 +273,12 @@ npm run web-security:test
 6. чужой `documentId` не доходит до operator API;
 7. browser JWT не может писать `operator_attempts`;
 8. browser JWT не может менять `subscriptions`/usage/payment events;
-9. browser payment history возвращает только safe metadata своего аккаунта;
-10. restricted gateway DB login не имеет административных прав;
-11. restricted billing DB login не имеет прямого UPDATE к subscription/payment events;
-12. `EPD_BILLING_PROVIDER=none`.
+9. browser payment history возвращает только разрешённые колонки своего аккаунта;
+10. прямой запрос `provider_event_id`/`payload_sha256` под browser JWT отклоняется правами БД;
+11. restricted gateway DB login не имеет административных прав;
+12. restricted billing DB login не имеет прямого UPDATE к subscription/payment events;
+13. `/api/billing/capabilities` сообщает real money disabled;
+14. `EPD_BILLING_PROVIDER=none`.
 
 ## 10. Local preview
 
@@ -293,8 +302,6 @@ EPD_KONTUR_BOX_ID=...
 EPD_KONTUR_ACCESS_TOKEN=...
 EPD_EXTERNAL_RATE_LIMIT_MAX=10
 ```
-
-Flow:
 
 ```text
 Browser: {documentId}
@@ -384,11 +391,12 @@ Encrypted backup на том же VPS — только первый уровен
 - [ ] `npm run kontur:generation:test`;
 - [ ] `npm run kontur:sandbox:test`;
 - [ ] `npm run build`;
-- [ ] все 7 SQL-миграций применены guarded runner'ом;
+- [ ] все 8 SQL-миграций применены guarded runner'ом;
 - [ ] RLS проверена двумя аккаунтами;
 - [ ] restricted gateway DB login создан отдельно от admin login;
 - [ ] billing DB login, если настроен заранее, отдельный от admin/operator login;
 - [ ] browser не может писать operator/payment journals;
+- [ ] browser payment history ограничена column privileges;
 - [ ] web доступен только через `127.0.0.1:8080`;
 - [ ] HTTPS работает;
 - [ ] CSP/security headers подтверждены runtime-проверкой;
@@ -397,6 +405,7 @@ Encrypted backup на том же VPS — только первый уровен
 - [ ] encrypted backup создан и проверен;
 - [ ] backup скопирован вне VPS;
 - [ ] restore drill выполнен;
+- [ ] `/api/billing/capabilities` fail-closed;
 - [ ] `externalSendEnabled=false`;
 - [ ] `PostMessage` отсутствует;
 - [ ] реальный payment checkout/webhook отсутствует до отдельного готового adapter.
