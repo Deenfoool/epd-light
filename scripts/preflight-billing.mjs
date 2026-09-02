@@ -9,8 +9,8 @@ const requireAll = (name, text, snippets) => {
   for (const snippet of snippets) if (!text.includes(snippet)) fail(`${name}: missing ${snippet}`)
 }
 
-const migration = await read('supabase', 'migrations', '202609020003_billing_payment_events.sql')
-requireAll('payment event migration', migration, [
+const ledgerMigration = await read('supabase', 'migrations', '202609020003_billing_payment_events.sql')
+requireAll('payment event migration', ledgerMigration, [
   'create table if not exists public.billing_payment_events',
   'constraint billing_payment_events_provider_event_unique unique (provider, provider_event_id)',
   'payload_sha256',
@@ -19,12 +19,27 @@ requireAll('payment event migration', migration, [
   'create policy billing_payment_events_own_read',
   'create role epd_billing_writer nologin noinherit',
   'grant select, insert, update on public.billing_payment_events to epd_billing_writer',
-  'revoke delete on public.billing_payment_events from epd_billing_writer',
 ])
-if (/grant\s+(?:insert|update|delete).*billing_payment_events\s+to\s+authenticated/i.test(migration)) {
+if (/grant\s+(?:insert|update|delete).*billing_payment_events\s+to\s+authenticated/i.test(ledgerMigration)) {
   fail('browser must never receive payment-event write permission')
 }
-if (/create\s+role\s+epd_billing_writer\s+login/i.test(migration)) fail('billing capability role must remain NOLOGIN')
+if (/create\s+role\s+epd_billing_writer\s+login/i.test(ledgerMigration)) fail('billing capability role must remain NOLOGIN')
+
+const entitlementMigration = await read('supabase', 'migrations', '202609020004_billing_entitlement_function.sql')
+requireAll('billing entitlement function migration', entitlementMigration, [
+  'create or replace function public.apply_verified_billing_entitlement',
+  'security definer',
+  'set search_path = pg_catalog, public',
+  "v_event.event_status <> 'verified'",
+  "v_event.plan_code is distinct from p_plan_code",
+  "status = 'active'",
+  "event_status = 'applied'",
+  'grant execute on function public.apply_verified_billing_entitlement',
+  'revoke update on public.subscriptions from epd_billing_writer',
+  'revoke update on public.billing_payment_events from epd_billing_writer',
+  'drop policy if exists subscriptions_billing_writer_update',
+  'drop policy if exists billing_payment_events_writer_update',
+])
 
 const repository = await read('server', 'repositories', 'billing-events.mjs')
 requireAll('billing repository', repository, [
@@ -35,16 +50,17 @@ requireAll('billing repository', repository, [
   "values ($1,$2,$3,$4,'verified'",
   'on conflict (provider, provider_event_id) do nothing',
   'applyVerifiedEntitlement',
-  "billingEvent.eventStatus !== 'verified'",
-  "status='active'",
-  "event_status='applied'",
+  "existing.eventStatus !== 'verified'",
+  'public.apply_verified_billing_entitlement(',
   'rawWebhookPayloadStored: false',
   'cardDataStored: false',
   'secretsStored: false',
   'verifiedEventRequiredForEntitlement: true',
+  'directSubscriptionUpdateAllowed: false',
+  'entitlementDatabaseFunctionRequired: true',
 ])
-for (const forbidden of ['console.log(config.connectionString)', 'rawWebhookPayload', 'cardNumber', 'cvv']) {
-  if (repository.includes(forbidden)) fail(`billing repository contains forbidden sensitive pattern: ${forbidden}`)
+for (const forbidden of ['update public.subscriptions', "set event_status='applied'", 'console.log(config.connectionString)', 'rawWebhookPayload', 'cardNumber', 'cvv']) {
+  if (repository.includes(forbidden)) fail(`billing repository bypasses DB function or contains sensitive pattern: ${forbidden}`)
 }
 
 const browserClient = await read('src', 'billing-events.ts')
@@ -116,4 +132,4 @@ for (const script of ['billing:test', 'billing-payment:test', 'billing-payment-c
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 
-console.log('Billing preflight OK: payment event ledger, restricted writer, verified-event entitlement boundary, safe browser history and disabled provider policy verified')
+console.log('Billing preflight OK: payment ledger, verified-event DB function, restricted writer, safe browser history and disabled provider policy verified')
