@@ -43,6 +43,7 @@ jobs:
           node --check scripts/test-auth.mjs
           node --check scripts/test-authorization.mjs
           node --check scripts/test-supabase-repository.mjs
+          node --check scripts/test-operator-attempt-repository.mjs
           node --check scripts/test-idempotency.mjs
           node --check scripts/test-billing-foundation.mjs
           node --check scripts/test-rate-limit.mjs
@@ -67,6 +68,8 @@ jobs:
         run: npm run authorization:test
       - name: Canonical Supabase RLS repository
         run: npm run repository:test
+      - name: Restricted operator journal repository
+        run: npm run attempt-repository:test
       - name: Operator idempotency
         run: npm run idempotency:test
       - name: Billing foundation
