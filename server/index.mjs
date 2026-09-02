@@ -4,6 +4,7 @@ import { auditErrorCode, writeGatewayAudit } from './audit.mjs'
 import { GATEWAY_AUTH_POLICY, assertGatewayAuthConfig, authenticateGatewayRequest, gatewayAuthConfigFromEnv } from './auth.mjs'
 import { EXTERNAL_OPERATOR_AUTHORIZATION_POLICY } from './authorization.mjs'
 import { billingConfigFromEnv, billingConfigStatus, billingPublicCapabilities } from './billing.mjs'
+import { buildInfoFromEnv, buildPublicInfo } from './build-info.mjs'
 import { buildTechnicalReadiness } from './readiness.mjs'
 import { authenticatedRateKey, consumeRateLimit, rateLimitConfigFromEnv, rateLimitHeaders, requestNetworkKey } from './rate-limit.mjs'
 import { konturConfigFromEnv, konturConfigStatus, konturPublicCapabilities } from './providers/kontur.mjs'
@@ -35,6 +36,8 @@ const billingConfig = billingConfigFromEnv()
 const billingStatus = billingConfigStatus(billingConfig)
 if (billingStatus.errors.length) throw new Error(`Unsupported EPD_BILLING_PROVIDER: ${billingConfig.provider}`)
 const billingCapabilities = billingPublicCapabilities(billingConfig)
+const buildInfo = buildInfoFromEnv()
+const publicBuildInfo = buildPublicInfo(buildInfo)
 const rateConfig = rateLimitConfigFromEnv()
 const repositoryConfig = supabaseDocumentRepositoryConfigFromEnv()
 const repositoryStatus = supabaseDocumentRepositoryStatus(repositoryConfig)
@@ -64,6 +67,7 @@ const technicalReadiness = () => buildTechnicalReadiness({
   sandboxReady: sandboxGenerateReady(),
   operatorAttemptJournalStatus: attemptRepositoryStatus,
   billingCapabilities,
+  buildInfo: publicBuildInfo,
   allowedOriginsCount: allowedOrigins.size,
 })
 
@@ -207,6 +211,14 @@ const server = createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
     respond(200, { ok: true, service: 'epd-light-gateway', requestId })
+    return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/system/version') {
+    respond(200, {
+      ...publicBuildInfo,
+      requestId,
+    })
     return
   }
 
@@ -440,5 +452,5 @@ server.headersTimeout = 10_000
 server.keepAliveTimeout = 5_000
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`EPD Light gateway listening on :${port}; operator=${provider}/${operatorMode}; billing=${billingConfig.provider}; auth=${authConfig.mode}; externalSendEnabled=false; realMoneyEnabled=false`)
+  console.log(`EPD Light gateway listening on :${port}; release=${publicBuildInfo.release}; commit=${publicBuildInfo.shortCommit}; operator=${provider}/${operatorMode}; billing=${billingConfig.provider}; auth=${authConfig.mode}; externalSendEnabled=false; realMoneyEnabled=false`)
 })
