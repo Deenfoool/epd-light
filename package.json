@@ -10,6 +10,7 @@
     "deploy:dependencies:check": "node scripts/check-runtime-dependencies.mjs",
     "deploy:server-day": "sh deploy/server-day.sh",
     "db:migrate": "sh deploy/apply-migrations.sh",
+    "db:migrations:check": "sh deploy/check-migrations.sh",
     "backup:create": "sh deploy/backup-postgres.sh",
     "backup:verify": "sh deploy/verify-postgres-backup.sh",
     "backup:restore:test": "sh deploy/test-restore-postgres.sh",
