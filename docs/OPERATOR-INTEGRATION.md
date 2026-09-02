@@ -2,9 +2,9 @@
 
 ## Роль ЭПД Лайт
 
-`ЭПД Лайт` не является оператором ИС ЭПД. Юридически значимый обмен должен выполняться через аккредитованного оператора ИС ЭПД.
+`ЭПД Лайт` не является оператором ИС ЭПД. Юридически значимый обмен выполняется только через аккредитованного оператора ИС ЭПД.
 
-Первый технический адаптер строится под Контур/Диадок из-за публичной документации `GetDocumentTypes (V3)`, `GetContent`, `GenerateTitleXml` и ЭТрН. Это пока технический выбор для sandbox, а не окончательно заключённый коммерческий договор.
+Первый технический adapter — Контур/Диадок, потому что публично документированы `GetDocumentTypes (V3)`, `GetContent`, `GenerateTitleXml` и формат ЭТрН. Это sandbox-технический выбор, а не утверждение о заключённом коммерческом договоре.
 
 ## Зафиксированный T1-контракт
 
@@ -15,15 +15,15 @@ documentVersion     = kl_trn_mt_05_01
 titleIndex          = 0
 ```
 
-Новая версия не переключается автоматически. Если `GetDocumentTypes (V3)` перестанет возвращать зафиксированную версию, schema checker должен остановиться и потребовать ручной проверки mapping.
+Версия не меняется автоматически. Drift требует ручной проверки mapping.
 
 ## Реализованные уровни
 
 ### 1. Operator-neutral draft
 
-`src/operator-draft.ts` строит `epd-light/operator-candidate-v1` из внутреннего draft-model v4.
+`src/operator-draft.ts` строит `epd-light/operator-candidate-v1` из draft-model v4.
 
-Он используется для preview/debug и **не является авторитетным источником для внешнего operator-вызова**.
+Он удобен для preview/debug, но неавторитетен для реального внешнего operator-call.
 
 ### 2. Local UserDataXml preview
 
@@ -31,41 +31,93 @@ titleIndex          = 0
 POST /api/operator/kontur/userdata-preview
 ```
 
-Gateway проверяет candidate и локально строит `LogisticsWaybillConsignorTitle`.
-
-Контур при этом не вызывается.
+Контур не вызывается.
 
 ### 3. Canonical RLS reload
 
-Для внешнего вызова браузер передаёт только `documentId`.
+Для внешнего вызова browser передаёт только `documentId`.
 
 Backend:
 
 1. проверяет Supabase JWT через JWKS;
-2. использует тот же пользовательский JWT для Supabase Data API;
-3. RLS `auth.uid() = user_id` ограничивает чтение документа;
-4. backend заново строит candidate из строки `documents`;
-5. повторно сверяет `row.user_id` и JWT `sub`.
+2. использует USER JWT для Supabase Data API;
+3. RLS `auth.uid() = user_id` ограничивает документ;
+4. заново строит candidate из `documents` row;
+5. сверяет `row.user_id` и JWT `sub`.
 
-Клиент не может подменить груз/участника/водителя, отправив изменённый Integration JSON непосредственно во внешний boundary.
+### 4. SHA-256 idempotency identity
 
-### 4. Sandbox GenerateTitleXml
+После canonical reload backend строит identity из:
 
-Реализован endpoint:
+```text
+documentId
+documents.updated_at
+provider
+mode
+operation
+documentVersion
+titleIndex
+```
+
+Дополнительно SHA-256 `requestFingerprint` считается от canonical candidate.
+
+Browser idempotency key не принимается как авторитетный.
+
+### 5. In-process duplicate collapse
+
+Одновременные запросы одной и той же revision в одном gateway-процессе делят один Promise. Второй caller получает shared result, а второго `GenerateTitleXml` нет.
+
+### 6. Persistent operator journal
+
+`public.operator_attempts` хранит только technical metadata. Browser может читать только свои записи через RLS и не имеет `INSERT/UPDATE/DELETE`.
+
+Пятая миграция создаёт restricted `NOLOGIN` role:
+
+```text
+epd_gateway_writer
+```
+
+Server runtime использует отдельный PostgreSQL LOGIN с membership в этой роли:
+
+```env
+EPD_GATEWAY_DATABASE_URL=postgresql://RESTRICTED_LOGIN:...@DB/epd_light
+EPD_GATEWAY_DATABASE_ROLE=epd_gateway_writer
+```
+
+Gateway делает `SET LOCAL ROLE epd_gateway_writer`.
+
+При configured repository lifecycle выглядит так:
+
+```text
+claim started
+ -> external GenerateTitleXml
+ -> succeeded | failed
+```
+
+Уже успешный action той же revision после restart возвращает `sandbox_already_generated` до нового operator-call.
+
+Зависший `started` считается retry-able только после `EPD_OPERATOR_ATTEMPT_STALE_MS`.
+
+Journal не хранит XML, Integration JSON, access tokens, ФИО или другие document payload fields.
+
+### 7. Sandbox GenerateTitleXml
+
+Endpoint:
 
 ```text
 POST /api/operator/kontur/generate-title-sandbox
 ```
 
-Он работает только в:
+Требует:
 
 ```env
+EPD_DEPLOYMENT_MODE=production
 EPD_OPERATOR_PROVIDER=kontur
 EPD_OPERATOR_MODE=sandbox
 EPD_GATEWAY_AUTH_MODE=supabase
 ```
 
-Тело строго:
+Request строго:
 
 ```json
 {
@@ -73,156 +125,139 @@ EPD_GATEWAY_AUTH_MODE=supabase
 }
 ```
 
-Дополнительные поля отклоняются.
-
 Flow:
 
 ```text
 documentId
  -> JWT/JWKS
- -> RLS document reload
+ -> user JWT RLS reload
  -> canonical mapper
  -> ownership check
+ -> idempotency identity
+ -> optional persistent claim
+ -> in-process dedupe
  -> validateKonturT1Candidate
  -> UserDataXml
  -> GenerateTitleXml
+ -> journal result
 ```
 
-Результат:
+Результат всё ещё:
 
-- `externalCallMade=true`;
-- `signed=false`;
-- `sent=false`;
-- `PostMessage` не вызывается.
+```text
+signed=false
+sent=false
+```
 
-На карточке документа кнопка `Kontur sandbox` появляется только если `/capabilities` возвращает `sandboxGenerateTitle.ready=true`. Перед внешним вызовом UI показывает отдельное подтверждение.
+`PostMessage` не вызывается.
 
-### 5. Production send
+### 8. Production send
 
 **Не реализован.**
 
-`POST /api/operator/send` всегда отвечает `503 operator_send_disabled`.
+```text
+POST /api/operator/send -> 503 operator_send_disabled
+```
 
-## Authentication и authorization
+## Authentication/authorization
 
-Внешние operator routes защищены:
+Внешние operator routes защищают:
 
-- Supabase JWT/JWKS verification;
+- production deployment guard;
+- Supabase JWT/JWKS;
 - `aud=authenticated`;
 - `role=authenticated`;
-- асимметричные `RS256/ES256`;
-- pre-auth network rate limit;
-- user rate limit по хешу `sub`;
-- отдельный строгий external-call rate limit;
-- RLS canonical document reload;
-- повторная ownership-проверка.
+- `RS256/ES256` allow-list;
+- pre-auth network rate-limit;
+- user rate-limit;
+- external-call rate-limit;
+- RLS canonical reload;
+- повторная ownership check;
+- server-derived idempotency.
 
-Для RLS repository используется публичный anon/publishable key + пользовательский JWT. `service_role` для пользовательского operator flow не нужен.
+## UserDataXml preview — что уже маппится
 
-## Privacy-safe audit
-
-В application log разрешены только технические метаданные: request id, route, status, duration и безопасный error code.
-
-Не логируются:
-
-- request/response document body;
-- UserDataXml/generated XML;
-- ФИО;
-- телефоны;
-- ИНН;
-- адреса;
-- ВУ;
-- BoxId документа;
-- пользовательский JWT;
-- operator access token.
-
-## Что уже маппится в UserDataXml preview
-
-- организации через `OrganizationReference BoxId`;
-- грузоотправитель/грузополучатель/перевозчик;
-- структурированные адреса погрузки/доставки;
-- CargoInfo/ItemDescription;
-- ContainerType;
-- маркировка;
-- водитель и реквизиты ВУ;
+- `OrganizationReference BoxId`;
+- shipper/consignee/carrier;
+- structured load/delivery addresses;
+- cargo/item description;
+- ContainerType/marking;
+- driver + ВУ;
 - Vehicle/Ownership;
 - LoadingInfo;
 - WeighingMethod;
-- `LoadingPartyDetails` при явном заполнении;
-- `LoadingOwnerDetails` при явном заполнении;
+- LoadingPartyDetails;
+- LoadingOwnerDetails;
 - Signer.
 
 ## Незакрытые format-вопросы
 
-До реального sandbox ответа актуального `UserDataXsd` остаются намеренно fail-closed:
+До актуального sandbox UserDataXsd остаются fail-closed:
 
-- ИП и иные допустимые типы участников;
-- полные enum `Ownership`;
-- полные enum `ContainerType`;
-- полные enum `WeighingMethod`;
+- ИП и остальные типы участников;
+- полные enum Ownership/ContainerType/WeighingMethod;
 - `LoadingOwnerDetails.Type`;
-- условная обязательность LoadingParty/Owner;
-- timezone-модель для фактических времён;
-- окончательная обратная проверка результата `GenerateTitleXml`.
+- условная обязательность loading blocks;
+- timezone semantics;
+- обратная проверка generated XML.
 
 ## Schema discovery
 
-После получения sandbox BoxId/token:
-
 ```bash
 npm run kontur:schema:check
+npm run kontur:schema:save
 ```
 
-Используются:
+Flow:
 
 ```text
 GetDocumentTypes (V3)
-  -> LogisticsWaybill/reception/kl_trn_mt_05_01/title 0
-  -> XsdUrl
-  -> UserDataXsdUrl
-  -> GetContent
-  -> SHA-256
-```
-
-Сохранить схемы:
-
-```bash
-npm run kontur:schema:save
+ -> pinned T1 descriptor
+ -> XsdUrl/UserDataXsdUrl
+ -> GetContent
+ -> SHA-256
 ```
 
 ## Следующие этапы
 
-1. Получить реальный sandbox/партнёрский доступ оператора.
-2. Запустить `kontur:schema:check` на тестовом ящике.
-3. Сверить каждый enum и условно обязательный элемент UserDataXsd.
+1. Получить реальный sandbox/partner API доступ.
+2. Получить и захешировать актуальные XSD/UserDataXsd.
+3. Сверить enums/conditional requiredness.
 4. Исправить mapping.
-5. Запустить первый реальный `Kontur sandbox` на полностью вымышленных тестовых данных.
-6. Проверить возвращённый XML и `ParseTitleXml`, если доступно для сценария.
-7. Добавить хранение sandbox-технического результата без превращения его в юридический статус.
-8. Спроектировать signing flow.
-9. Только после signing flow проектировать `PostMessage`.
-10. Добавить idempotency/external identifiers для отправки.
-11. Провести end-to-end тестовый обмен.
-12. Только после этого открывать production send.
+5. Создать отдельный restricted gateway DB LOGIN и проверить persistent journal на реальной DB.
+6. Выполнить первый реальный `GenerateTitleXml` на вымышленных данных.
+7. Проверить returned XML/ParseTitleXml, если сценарий доступен.
+8. Определить signing flow.
+9. Только после signing проектировать `PostMessage`.
+10. Добавить external message/entity IDs в metadata journal.
+11. Реализовать operator status/webhook reconciliation.
+12. Провести end-to-end sandbox test.
+13. Только после этого открывать production send.
 
-## Внутренние статусы
+## Внутренние статусы документа
 
-Пока разрешены только:
+Пока разрешены:
 
-- `draft`;
-- `incomplete`;
-- `ready` — внутренний черновик;
-- `archived`.
+```text
+draft
+incomplete
+ready
+archived
+```
 
-Успешный `GenerateTitleXml` в sandbox **не меняет** документ на `sent`, `signed` или `accepted`.
+Успешный sandbox `GenerateTitleXml` не превращает документ в `sent/signed/accepted`.
+
+## Privacy
+
+Application log и operator journal не должны содержать полный document payload, XML, JWT/operator token или ПД. Допустимы только технические metadata и safe error codes.
 
 ## Источники
 
 - ФНС — обязательный транспортный ЭДО: https://www.nalog.gov.ru/rn77/related_activities/el_doc/el_bus_entities/edotransp/
 - ФНС — операторы ИС ЭПД: https://www.nalog.gov.ru/rn77/oedo/oisepd/
-- ФНС — форматы черновиков: https://www.nalog.gov.ru/rn77/related_activities/el_doc/el_bus_entities/approved_formats/16631750/
+- ФНС — форматы: https://www.nalog.gov.ru/rn77/related_activities/el_doc/el_bus_entities/approved_formats/16631750/
 - Минтранс — ГИС ЭПД: https://www.mintrans.gov.ru/activities/376
 - Диадок API — ЭТрН: https://developer.kontur.ru/doc/diadoc-api/instructions/documents/formal/waybill.html
 - Диадок API — форматы: https://developer.kontur.ru/doc/diadoc-api/docflows/formats.html
 
-Перед production все требования и версии повторно сверяются с актуальными официальными источниками и договором выбранного оператора.
+Перед production версии/требования повторно сверяются с актуальной официальной документацией и договором выбранного оператора.
