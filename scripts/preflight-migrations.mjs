@@ -23,6 +23,7 @@ const expectedMigrations = [
   '202609020003_billing_payment_events.sql',
   '202609020004_billing_entitlement_function.sql',
   '202609020005_billing_payment_event_column_privileges.sql',
+  '202609020006_account_deletion_requests.sql',
 ]
 const actualMigrations = (await readdir(path.join(root, 'supabase', 'migrations')))
   .filter((name) => name.endsWith('.sql'))
@@ -96,4 +97,4 @@ if (!String(pkg.scripts?.preflight || '').includes('preflight-migrations.mjs')) 
   fail('npm run preflight must include preflight-migrations.mjs')
 }
 
-console.log('Migration preflight OK: shell syntax, exact 8-file registry, SHA-256 drift detection, rollback protection and secret-safe production checker verified')
+console.log('Migration preflight OK: shell syntax, exact 9-file registry, SHA-256 drift detection, rollback protection and secret-safe production checker verified')
