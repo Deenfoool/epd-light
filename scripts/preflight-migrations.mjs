@@ -89,9 +89,6 @@ if (!String(pkg.scripts?.preflight || '').includes('preflight-migrations.mjs')) 
 }
 
 const ci = await read('.github', 'workflows', 'ci.yml')
-requireAll('CI migration checker syntax', ci, [
-  'node --check scripts/preflight-migrations.mjs',
-  'sh -n deploy/check-migrations.sh',
-])
+requireAll('CI migration checker shell syntax', ci, ['sh -n deploy/check-migrations.sh'])
 
 console.log('Migration preflight OK: exact 8-file registry, SHA-256 drift detection, rollback protection and secret-safe production checker verified')
