@@ -177,3 +177,46 @@ export type Profile = {
   email: string
   onboarded: boolean
 }
+
+export type BillingPlan = {
+  code: string
+  name: string
+  monthly_price_rub: number
+  document_limit: number | null
+  active: boolean
+  features: Record<string, unknown>
+  sort_order: number
+}
+
+export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'expired'
+
+export type BillingSubscription = {
+  user_id: string
+  plan_code: string
+  status: SubscriptionStatus
+  trial_ends_at: string | null
+  current_period_start: string
+  current_period_end: string
+  cancel_at_period_end: boolean
+  payment_provider: string
+  created_at: string
+  updated_at: string
+}
+
+export type BillingUsage = {
+  user_id: string
+  period_start: string
+  documents_created: number
+  sandbox_generations: number
+  updated_at: string
+}
+
+export type BillingState = {
+  mode: 'demo' | 'cloud'
+  enforcementEnabled: boolean
+  trialDays: number
+  plans: BillingPlan[]
+  subscription: BillingSubscription | null
+  currentPlan: BillingPlan | null
+  usage: BillingUsage | null
+}
