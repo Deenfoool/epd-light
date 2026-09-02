@@ -68,6 +68,7 @@ echo "Build time: $BUILD_TIME"
 run_node scripts/check-deployment-env.mjs
 run_node scripts/check-billing-env.mjs
 run_node scripts/preflight-deploy.mjs
+run_node scripts/preflight-source.mjs
 run_node scripts/preflight-migrations.mjs
 run_node scripts/preflight-backup.mjs
 run_node scripts/preflight-billing.mjs
