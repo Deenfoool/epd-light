@@ -125,6 +125,26 @@ export type DocumentRow = {
   updated_at: string
 }
 
+export type OperatorAttemptStatus = 'started' | 'succeeded' | 'failed' | 'blocked'
+
+/** Safe metadata only. The operator journal never exposes XML/document payload/tokens. */
+export type OperatorAttempt = {
+  id: string
+  document_id: string
+  provider: 'kontur' | string
+  operation: 'generate_title' | 'post_message' | string
+  mode: 'sandbox' | 'production' | string
+  document_revision: string
+  idempotency_key: string
+  request_fingerprint: string
+  status: OperatorAttemptStatus
+  safe_error_code: string
+  external_message_id: string
+  external_entity_id: string
+  created_at: string
+  updated_at: string
+}
+
 export type Company = {
   id: string
   org_type?: OrgType
