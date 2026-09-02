@@ -85,12 +85,16 @@ if (app.includes('provider_event_id') || app.includes('payload_sha256')) fail('b
 const billingPolicy = await read('server', 'billing.mjs')
 requireAll('billing policy', billingPolicy, [
   "provider: 'none'",
+  'checkoutServerOwned: true',
+  'browserSuppliedPriceAccepted: false',
+  'browserSuppliedUserIdAccepted: false',
+  'browserCanActivateSubscription: false',
+  'successRedirectAuthoritative: false',
+  'verifiedWebhookRequiredForActivation: true',
+  'webhookRouteImplemented: false',
+  'directRuntimeSubscriptionUpdateAllowed: false',
+  'entitlementDatabaseFunctionRequired: true',
   'realMoneyEnabled: false',
-  'browserCanSetPrice: false',
-  'browserCanSetUserId: false',
-  'successRedirectProvesPayment: false',
-  'verifiedWebhookRequired: true',
-  'serverOwnedEntitlementWriteRequired: true',
 ])
 
 const envCheck = await read('scripts', 'check-billing-env.mjs')
