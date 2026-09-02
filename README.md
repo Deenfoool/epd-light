@@ -56,16 +56,21 @@ MVP SaaS для подготовки, проверки и хранения **ч�
 - read-only subscription state для browser JWT;
 - monthly usage;
 - PostgreSQL trigger, считающий реальные INSERT документов;
-- страница `/app/billing`;
-- server-side foundation для будущего enforcement.
+- metadata-only `billing_payment_events` ledger;
+- provider-event idempotency;
+- restricted `epd_billing_writer` capability-role;
+- server boundary `verified event -> active entitlement`;
+- read-only история safe payment metadata в `/app/billing`;
+- browser не может подделать payment event или сменить план.
 
 Пока намеренно:
 
 ```text
 billing_settings.enforcement_enabled = false
+EPD_BILLING_PROVIDER=none
 ```
 
-То есть деньги не списываются, checkout/webhooks/чеки не подключены, отсутствие оплаты никого не блокирует.
+То есть деньги не списываются, checkout/provider webhook/чеки не подключены, отсутствие оплаты никого не блокирует. Success redirect не считается подтверждением платежа.
 
 ## Быстрый local запуск
 
@@ -96,13 +101,14 @@ EPD_AUTH_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 EPD_DATA_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_ANON_OR_PUBLISHABLE_KEY
 EPD_ALLOWED_ORIGINS=https://epd.example.ru
+EPD_BILLING_PROVIDER=none
 ```
 
-Production gateway сам откажется стартовать без Supabase auth.
+Production gateway сам откажется стартовать без Supabase auth. Billing provider checker отдельно не позволит случайно включить ещё не реализованный payment adapter.
 
 ## Миграции
 
-Актуально 5 migration-файлов:
+Актуально **6 migration-файлов**:
 
 ```text
 supabase/migrations/202609010001_init.sql
@@ -110,6 +116,7 @@ supabase/migrations/202609010002_extend_directories_t1.sql
 supabase/migrations/202609010003_operator_attempts.sql
 supabase/migrations/202609020001_billing_foundation.sql
 supabase/migrations/202609020002_gateway_writer_role.sql
+supabase/migrations/202609020003_billing_payment_events.sql
 ```
 
 Production:
@@ -143,16 +150,34 @@ EPD_OPERATOR_ATTEMPT_STALE_MS=300000
 
 `EPD_GATEWAY_DATABASE_URL` нельзя заменять административным `EPD_DATABASE_URL`.
 
-Journal хранит только:
+Journal хранит только UUID/operation/provider/revision/hash/status metadata. Он не хранит XML, document payload и tokens.
 
-- UUID документа/пользователя;
-- operation/provider/mode;
-- revision;
-- SHA-256 fingerprint/idempotency key;
-- status/safe error code;
-- будущие технические external IDs.
+## Billing payment boundary
 
-Он не хранит XML, document payload и tokens.
+Будущий verified webhook worker будет использовать **третий отдельный restricted DB-login**:
+
+```env
+EPD_BILLING_PROVIDER=none
+EPD_BILLING_DATABASE_URL=
+EPD_BILLING_DATABASE_ROLE=epd_billing_writer
+```
+
+Он не должен совпадать ни с admin `EPD_DATABASE_URL`, ни с operator journal `EPD_GATEWAY_DATABASE_URL`.
+
+Целевая последовательность:
+
+```text
+provider webhook
+ -> verify authenticity/signature
+ -> resolve user + plan server-side
+ -> hash raw payload
+ -> claimVerifiedEvent
+ -> unique provider event id
+ -> applyVerifiedEntitlement
+ -> subscription active
+```
+
+Raw webhook body, данные карты, CVV и provider secrets в `billing_payment_events` не хранятся. Browser история не запрашивает даже provider event id и payload hash.
 
 ## Kontur sandbox
 
@@ -224,6 +249,7 @@ Backup: custom `pg_dump` → verify → AES-256/PBKDF2 → SHA-256. Копия �
 ```bash
 npm run preflight
 npm run deploy:env:test
+npm run web-security:test
 npm run audit:test
 npm run authorization:test
 npm run repository:test
@@ -231,6 +257,9 @@ npm run attempt-repository:test
 npm run attempt-client:test
 npm run idempotency:test
 npm run billing:test
+npm run billing-payment:test
+npm run billing-payment-client:test
+npm run billing-env:test
 npm run rate-limit:test
 npm run gateway:test
 npm run kontur:userdata:test
@@ -257,7 +286,7 @@ GitHub Actions поддерживает ручной `workflow_dispatch`. Ком
 - ParseTitleXml/обратная проверка, если доступна;
 - signing architecture;
 - только потом `PostMessage` и operator statuses/webhooks;
-- payment provider checkout + verified webhooks;
+- выбрать payment provider и реализовать checkout + verified webhook adapter поверх уже готового ledger;
 - чеки/54-ФЗ и договорная модель до реальных списаний;
 - только после payment smoke-test включить billing enforcement;
 - HTTPS, offsite backups, monitoring и restore drills;
