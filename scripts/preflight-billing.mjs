@@ -15,7 +15,6 @@ requireAll('payment event migration', ledgerMigration, [
   'constraint billing_payment_events_provider_event_unique unique (provider, provider_event_id)',
   'payload_sha256',
   "event_status in ('received','verified','applied','ignored','failed')",
-  'grant select on public.billing_payment_events to authenticated',
   'create policy billing_payment_events_own_read',
   'create role epd_billing_writer nologin noinherit',
   'grant select, insert, update on public.billing_payment_events to epd_billing_writer',
@@ -40,6 +39,16 @@ requireAll('billing entitlement function migration', entitlementMigration, [
   'drop policy if exists subscriptions_billing_writer_update',
   'drop policy if exists billing_payment_events_writer_update',
 ])
+
+const columnPrivileges = await read('supabase', 'migrations', '202609020005_billing_payment_event_column_privileges.sql')
+requireAll('billing payment column privileges', columnPrivileges, [
+  'revoke all on public.billing_payment_events from authenticated',
+  'grant select (',
+  'provider,', 'event_type,', 'event_status,', 'plan_code,', 'amount_kopecks,', 'currency,', 'safe_error_code,', 'created_at,', 'processed_at',
+  ') on public.billing_payment_events to authenticated',
+  'using (auth.uid() = user_id)',
+])
+if (columnPrivileges.includes('grant select on public.billing_payment_events to authenticated')) fail('payment history must use column-level SELECT, not table-wide SELECT')
 
 const repository = await read('server', 'repositories', 'billing-events.mjs')
 requireAll('billing repository', repository, [
@@ -136,4 +145,4 @@ for (const script of ['billing:test', 'billing-payment:test', 'billing-payment-c
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 
-console.log('Billing preflight OK: payment ledger, verified-event DB function, restricted writer, safe browser history and disabled provider policy verified')
+console.log('Billing preflight OK: payment ledger, verified-event DB function, column-level browser history, restricted writer and disabled provider policy verified')
