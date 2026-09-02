@@ -106,6 +106,19 @@ requireAll('billing policy', billingPolicy, [
   'realMoneyEnabled: false',
 ])
 
+const gateway = await read('server', 'index.mjs')
+requireAll('billing gateway capabilities', gateway, [
+  "url.pathname === '/api/billing/capabilities'",
+  'billingConfigFromEnv',
+  'billingConfigStatus',
+  'billingPublicCapabilities',
+  'Unsupported EPD_BILLING_PROVIDER',
+  "service: 'epd-light-billing-boundary'",
+  'realMoneyEnabled=false',
+])
+if (gateway.includes("url.pathname === '/api/billing/checkout'")) fail('real checkout route must stay absent until provider adapter is implemented')
+if (gateway.includes("url.pathname.includes('/api/billing/webhook')")) fail('billing webhook route must stay absent until provider verification is implemented')
+
 const envCheck = await read('scripts', 'check-billing-env.mjs')
 requireAll('billing env checker', envCheck, [
   "EPD_BILLING_PROVIDER') || 'none'",
@@ -137,7 +150,12 @@ requireAll('server-day billing', serverDay, [
   'scripts/test-billing-env.mjs',
   'scripts/test-billing-payment-boundary.mjs',
   'scripts/test-billing-payment-client.mjs',
-  'Billing provider must remain disabled',
+  '/api/billing/capabilities',
+  '\"provider\":\"none\"',
+  '\"checkoutEnabled\":false',
+  '\"webhookEnabled\":false',
+  '\"realMoneyEnabled\":false',
+  'Billing provider, checkout, webhook and real money are confirmed disabled.',
 ])
 
 const pkg = JSON.parse(await read('package.json'))
@@ -145,4 +163,4 @@ for (const script of ['billing:test', 'billing-payment:test', 'billing-payment-c
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 
-console.log('Billing preflight OK: payment ledger, verified-event DB function, column-level browser history, restricted writer and disabled provider policy verified')
+console.log('Billing preflight OK: payment ledger, verified-event DB function, column-level browser history, fail-closed capabilities, restricted writer and disabled provider policy verified')
