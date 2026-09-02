@@ -12,6 +12,7 @@ import { gatewayFetch } from './gateway'
 import { billingErrorMessage, billingRemainingDocuments, billingStatusLabel, getBillingState } from './billing'
 import { billingPaymentEventStatusLabel, listBillingPaymentEvents } from './billing-events'
 import { listOperatorAttempts, operatorAttemptStatusLabel } from './operator-attempts'
+import { buildAccountDataExport, deletionRequestStatusLabel, downloadAccountDataExport, listAccountDeletionRequests, requestAccountDeletion } from './privacy'
 import {
   cloudEnabled, deleteCompany, deleteDocument, deleteDriver, deleteVehicle, getProfile, getSessionEmail,
   listCompanies, listDocuments, listDrivers, listVehicles, saveCompany, saveDocument, saveDriver,
