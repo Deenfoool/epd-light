@@ -72,6 +72,7 @@ jobs:
           node --check scripts/test-kontur-sandbox.mjs
           sh -n deploy/server-day.sh
           sh -n deploy/apply-migrations.sh
+          sh -n deploy/check-migrations.sh
           sh -n deploy/backup-postgres.sh
           sh -n deploy/verify-postgres-backup.sh
           sh -n deploy/test-restore-postgres.sh
