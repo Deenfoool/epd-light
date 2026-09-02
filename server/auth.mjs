@@ -1,4 +1,5 @@
 const AUTH_MODES = new Set(['disabled', 'supabase'])
+const DEPLOYMENT_MODES = new Set(['local', 'production'])
 const ALLOWED_ALGORITHMS = ['RS256', 'ES256']
 const remoteJwks = new Map()
 let joseModulePromise
@@ -20,9 +21,11 @@ function normalizeBaseUrl(value) {
 
 export function gatewayAuthConfigFromEnv(env = process.env) {
   const mode = String(env.EPD_GATEWAY_AUTH_MODE || 'disabled').trim().toLowerCase()
+  const deploymentMode = String(env.EPD_DEPLOYMENT_MODE || 'local').trim().toLowerCase()
   const supabaseUrl = normalizeBaseUrl(env.EPD_AUTH_SUPABASE_URL || '')
   return {
     mode,
+    deploymentMode,
     supabaseUrl,
     issuer: supabaseUrl ? `${supabaseUrl}/auth/v1` : '',
     jwksUrl: supabaseUrl ? `${supabaseUrl}/auth/v1/.well-known/jwks.json` : '',
@@ -33,11 +36,17 @@ export function gatewayAuthConfigFromEnv(env = process.env) {
 }
 
 export function assertGatewayAuthConfig(config, operatorMode = 'disabled') {
+  if (!DEPLOYMENT_MODES.has(config?.deploymentMode)) {
+    throw new Error(`Unsupported EPD_DEPLOYMENT_MODE: ${config?.deploymentMode || '<empty>'}`)
+  }
   if (!AUTH_MODES.has(config?.mode)) {
     throw new Error(`Unsupported EPD_GATEWAY_AUTH_MODE: ${config?.mode || '<empty>'}`)
   }
   if (config.mode === 'supabase' && !config.supabaseUrl) {
     throw new Error('EPD_AUTH_SUPABASE_URL is required when EPD_GATEWAY_AUTH_MODE=supabase')
+  }
+  if (config.deploymentMode === 'production' && config.mode !== 'supabase') {
+    throw new Error('Production deployment requires EPD_GATEWAY_AUTH_MODE=supabase')
   }
   if (String(operatorMode || 'disabled') !== 'disabled' && config.mode !== 'supabase') {
     throw new Error('Non-disabled operator mode requires EPD_GATEWAY_AUTH_MODE=supabase')
@@ -114,6 +123,8 @@ export const GATEWAY_AUTH_POLICY = Object.freeze({
   jwksPath: '/auth/v1/.well-known/jwks.json',
   audience: 'authenticated',
   acceptedAlgorithms: ALLOWED_ALGORITHMS,
+  deploymentModes: [...DEPLOYMENT_MODES],
+  productionRequiresSupabaseAuth: true,
   sharedJwtSecretAccepted: false,
   verifiedTokenAvailableToServerRepository: true,
   accessTokenEnumerable: false,
