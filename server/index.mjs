@@ -344,10 +344,14 @@ const server = createServer(async (req, res) => {
         provider: result.provider,
         contract: result.contract,
         generatedXml: result.generatedXml,
-        externalCallMade: true,
+        externalCallMade: Boolean(result.externalCallMade),
+        externalResultShared: Boolean(result.externalResultShared),
+        idempotency: result.idempotency,
         signed: false,
         sent: false,
-        message: 'Sandbox GenerateTitleXml выполнен. XML не подписан и не отправлен через PostMessage.',
+        message: result.externalResultShared
+          ? 'Параллельный sandbox GenerateTitleXml уже выполнялся для этой revision; возвращён тот же результат. XML не подписан и не отправлен через PostMessage.'
+          : 'Sandbox GenerateTitleXml выполнен. XML не подписан и не отправлен через PostMessage.',
         requestId,
       }, null, externalHeaders)
     } catch (error) {
