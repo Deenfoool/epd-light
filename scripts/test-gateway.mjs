@@ -3,10 +3,14 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 const port = 18787 + Math.floor(Math.random() * 1000)
 const base = `http://127.0.0.1:${port}`
+const testCommit = 'abcdef1234567890abcdef1234567890abcdef12'
 const child = spawn(process.execPath, ['server/index.mjs'], {
   env: {
     ...process.env,
     PORT: String(port),
+    EPD_RELEASE: '0.1.0-test',
+    EPD_BUILD_COMMIT: testCommit,
+    EPD_BUILD_TIME: '2026-09-02T08:30:00Z',
     EPD_DEPLOYMENT_MODE: 'local',
     EPD_OPERATOR_PROVIDER: 'none',
     EPD_OPERATOR_MODE: 'disabled',
@@ -45,6 +49,21 @@ const p = (id, phone) => ({ kind: 'org', name: 'ООО Тест', inn: '77000000
 
 try {
   await waitForHealth()
+
+  const versionResponse = await fetch(`${base}/api/system/version`)
+  const version = await versionResponse.json()
+  assert(versionResponse.status === 200, 'system version status must be 200')
+  assert(version.release === '0.1.0-test', 'system version release mismatch')
+  assert(version.commit === testCommit && version.shortCommit === testCommit.slice(0, 12), 'system version commit mismatch')
+  assert(version.traceableBuild === true && version.sensitiveValuesIncluded === false, 'system version must be traceable and secret-free')
+
+  const readinessResponse = await fetch(`${base}/api/system/readiness`)
+  const readiness = await readinessResponse.json()
+  assert(readinessResponse.status === 200, 'technical readiness status must be 200')
+  assert(readiness.technicalReadinessOnly === true && readiness.legalReadinessClaimed === false, 'readiness must never claim legal readiness')
+  assert(readiness.productionBaselineReady === false, 'local smoke test must not report production baseline ready')
+  assert(readiness.checks?.traceableRuntimeBuild === true, 'local smoke still should expose traceable test build')
+  assert(readiness.sensitiveValuesIncluded === false, 'readiness output must stay secret-free')
 
   const billingCapabilitiesResponse = await fetch(`${base}/api/billing/capabilities`)
   const billingCapabilities = await billingCapabilitiesResponse.json()
@@ -120,11 +139,13 @@ try {
   for (const forbidden of ['Иванов Секретный Иванович', '+79991234567', 'СЕКРЕТ-ГРУЗ', '<LogisticsWaybillConsignorTitle']) {
     assert(!stdout.includes(forbidden), `gateway stdout leaked request/response payload data: ${forbidden}`)
   }
+  assert(stdout.includes('"path":"/api/system/version"'), 'system version route should be audited')
+  assert(stdout.includes('"path":"/api/system/readiness"'), 'system readiness route should be audited')
   assert(stdout.includes('"path":"/api/billing/capabilities"'), 'billing capabilities route should be audited')
   assert(stdout.includes('"path":"/api/operator/preflight"'), 'preflight route should be audited')
   assert(stdout.includes('"errorCode":"operator_send_disabled"'), 'disabled send should expose only machine-safe audit code')
 
-  console.log('Gateway smoke test OK: isolated local auth, fail-closed billing capabilities, preview, disabled sandbox/send and payload-free audit verified')
+  console.log('Gateway smoke test OK: runtime version/readiness, isolated local auth, fail-closed billing, preview, disabled sandbox/send and payload-free audit verified')
 } finally {
   child.kill('SIGTERM')
   await Promise.race([new Promise((resolve) => child.once('exit', resolve)), sleep(1000)])
