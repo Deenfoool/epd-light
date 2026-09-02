@@ -51,6 +51,8 @@ echo "Build time: $BUILD_TIME"
 run_node scripts/check-deployment-env.mjs
 run_node scripts/check-billing-env.mjs
 run_node scripts/preflight-deploy.mjs
+run_node scripts/preflight-migrations.mjs
+run_node scripts/preflight-backup.mjs
 run_node scripts/preflight-billing.mjs
 run_node scripts/preflight-runtime.mjs
 run_node scripts/preflight.mjs
@@ -75,8 +77,11 @@ run_node scripts/test-kontur-userdata.mjs
 run_node scripts/test-kontur-generation.mjs
 run_node scripts/test-kontur-sandbox.mjs
 
-echo "== Production migration registry =="
+echo "== Production migration registry check =="
 sh "$ROOT_DIR/deploy/check-migrations.sh" "$ENV_FILE"
+
+echo "== Production backup readiness =="
+sh "$ROOT_DIR/deploy/check-backup-readiness.sh" "$ENV_FILE"
 
 echo "== Production dependency smoke check =="
 run_node scripts/check-runtime-dependencies.mjs
@@ -175,6 +180,7 @@ printf '%s' "$HEADERS" | grep -qi 'X-Content-Type-Options: nosniff' || { echo "E
 echo "== Deployment started safely =="
 echo "Runtime commit verified: $BUILD_COMMIT"
 echo "Production migration registry exactly matches this checkout."
+echo "A recent encrypted PostgreSQL backup passed checksum, decryption and pg_restore verification."
 echo "Supabase Auth JWKS and Data API billing foundation were reachable before launch."
 echo "Project HTTP is bound to 127.0.0.1:8080. Put an HTTPS reverse proxy in front of it before public access."
 echo "Technical production baseline is ready; this check does not claim legal or operator-production readiness."
