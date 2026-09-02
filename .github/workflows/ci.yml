@@ -35,6 +35,7 @@ jobs:
           node --check server/services/kontur-sandbox.mjs
           node --check scripts/preflight.mjs
           node --check scripts/preflight-deploy.mjs
+          node --check scripts/preflight-runtime.mjs
           node --check scripts/check-deployment-env.mjs
           node --check scripts/test-deployment-env.mjs
           node --check scripts/check-fns-schema.mjs
