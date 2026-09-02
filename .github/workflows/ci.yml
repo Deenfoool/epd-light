@@ -54,6 +54,7 @@ jobs:
           node --check scripts/test-idempotency.mjs
           node --check scripts/test-billing-foundation.mjs
           node --check scripts/test-billing-payment-boundary.mjs
+          node --check scripts/test-billing-payment-client.mjs
           node --check scripts/test-web-security.mjs
           node --check scripts/test-rate-limit.mjs
           node --check scripts/test-gateway.mjs
@@ -89,6 +90,8 @@ jobs:
         run: npm run billing:test
       - name: Billing payment boundary
         run: npm run billing-payment:test
+      - name: Billing payment browser history boundary
+        run: npm run billing-payment-client:test
       - name: Billing environment isolation
         run: npm run billing-env:test
       - name: Rate limiter unit test
