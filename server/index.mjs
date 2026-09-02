@@ -4,6 +4,7 @@ import { auditErrorCode, writeGatewayAudit } from './audit.mjs'
 import { GATEWAY_AUTH_POLICY, assertGatewayAuthConfig, authenticateGatewayRequest, gatewayAuthConfigFromEnv } from './auth.mjs'
 import { EXTERNAL_OPERATOR_AUTHORIZATION_POLICY } from './authorization.mjs'
 import { billingConfigFromEnv, billingConfigStatus, billingPublicCapabilities } from './billing.mjs'
+import { buildTechnicalReadiness } from './readiness.mjs'
 import { authenticatedRateKey, consumeRateLimit, rateLimitConfigFromEnv, rateLimitHeaders, requestNetworkKey } from './rate-limit.mjs'
 import { konturConfigFromEnv, konturConfigStatus, konturPublicCapabilities } from './providers/kontur.mjs'
 import { KONTUR_USERDATA_PREVIEW_CONTRACT, buildKonturT1UserDataXml, validateKonturT1Candidate } from './providers/kontur-userdata.mjs'
@@ -33,6 +34,7 @@ const authConfig = assertGatewayAuthConfig(gatewayAuthConfigFromEnv(), operatorM
 const billingConfig = billingConfigFromEnv()
 const billingStatus = billingConfigStatus(billingConfig)
 if (billingStatus.errors.length) throw new Error(`Unsupported EPD_BILLING_PROVIDER: ${billingConfig.provider}`)
+const billingCapabilities = billingPublicCapabilities(billingConfig)
 const rateConfig = rateLimitConfigFromEnv()
 const repositoryConfig = supabaseDocumentRepositoryConfigFromEnv()
 const repositoryStatus = supabaseDocumentRepositoryStatus(repositoryConfig)
@@ -53,6 +55,17 @@ const sandboxGenerateReady = () => operatorMode === 'sandbox'
   && authConfig.mode === 'supabase'
   && repositoryStatus.configured
   && konturStatus.configured
+
+const technicalReadiness = () => buildTechnicalReadiness({
+  authConfig,
+  documentRepositoryStatus: repositoryStatus,
+  operatorMode,
+  operatorProvider: provider,
+  sandboxReady: sandboxGenerateReady(),
+  operatorAttemptJournalStatus: attemptRepositoryStatus,
+  billingCapabilities,
+  allowedOriginsCount: allowedOrigins.size,
+})
 
 function responseHeaders(requestId, origin, extra = {}) {
   const headers = {
@@ -193,14 +206,24 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
-    respond(200, { ok: true, service: 'epd-light-operator-gateway', requestId })
+    respond(200, { ok: true, service: 'epd-light-gateway', requestId })
+    return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/system/readiness') {
+    respond(200, {
+      service: 'epd-light-technical-readiness',
+      ...technicalReadiness(),
+      message: 'Technical deployment checks only. This endpoint does not claim legal, regulatory, XSD, signing or operator-production readiness.',
+      requestId,
+    })
     return
   }
 
   if (req.method === 'GET' && url.pathname === '/api/billing/capabilities') {
     respond(200, {
       service: 'epd-light-billing-boundary',
-      ...billingPublicCapabilities(billingConfig),
+      ...billingCapabilities,
       message: 'Payment provider is fail-closed. Checkout/webhook and real money remain disabled until a verified provider adapter is implemented.',
       requestId,
     })
