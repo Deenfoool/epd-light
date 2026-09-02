@@ -40,6 +40,7 @@ run_node scripts/test-deployment-env.mjs
 run_node scripts/test-audit.mjs
 run_node scripts/test-authorization.mjs
 run_node scripts/test-supabase-repository.mjs
+run_node scripts/test-operator-attempt-repository.mjs
 run_node scripts/test-idempotency.mjs
 run_node scripts/test-billing-foundation.mjs
 run_node scripts/test-rate-limit.mjs
@@ -74,6 +75,12 @@ CAPS="$(dc exec -T web wget -q -O - http://127.0.0.1:8080/api/operator/capabilit
 if ! printf '%s' "$CAPS" | grep -q '"externalSendEnabled":false'; then
   echo "ERROR: gateway does not report externalSendEnabled=false" >&2
   exit 1
+fi
+if printf '%s' "$CAPS" | grep -q '"mode":"sandbox"'; then
+  if ! printf '%s' "$CAPS" | grep -q '"persistentAttemptJournal"'; then
+    echo "ERROR: sandbox capabilities do not expose persistent journal status" >&2
+    exit 1
+  fi
 fi
 printf '%s\n' "$CAPS"
 
