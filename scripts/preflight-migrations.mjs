@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { readdir, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -7,6 +8,10 @@ const read = (...parts) => readFile(path.join(root, ...parts), 'utf8')
 const fail = (message) => { console.error(`MIGRATION PRECHECK FAILED: ${message}`); process.exit(1) }
 const requireAll = (name, text, snippets) => {
   for (const snippet of snippets) if (!text.includes(snippet)) fail(`${name}: missing ${snippet}`)
+}
+const shellSyntax = (...parts) => {
+  try { execFileSync('sh', ['-n', path.join(root, ...parts)], { stdio: 'pipe' }) }
+  catch { fail(`shell syntax invalid: ${parts.join('/')}`) }
 }
 
 const expectedMigrations = [
@@ -25,6 +30,9 @@ const actualMigrations = (await readdir(path.join(root, 'supabase', 'migrations'
 if (JSON.stringify(actualMigrations) !== JSON.stringify(expectedMigrations)) {
   fail(`unexpected migration set: ${actualMigrations.join(', ')}`)
 }
+
+shellSyntax('deploy', 'check-migrations.sh')
+shellSyntax('deploy', 'apply-migrations.sh')
 
 const checker = await read('deploy', 'check-migrations.sh')
 requireAll('migration status checker', checker, [
@@ -88,7 +96,4 @@ if (!String(pkg.scripts?.preflight || '').includes('preflight-migrations.mjs')) 
   fail('npm run preflight must include preflight-migrations.mjs')
 }
 
-const ci = await read('.github', 'workflows', 'ci.yml')
-requireAll('CI migration checker shell syntax', ci, ['sh -n deploy/check-migrations.sh'])
-
-console.log('Migration preflight OK: exact 8-file registry, SHA-256 drift detection, rollback protection and secret-safe production checker verified')
+console.log('Migration preflight OK: shell syntax, exact 8-file registry, SHA-256 drift detection, rollback protection and secret-safe production checker verified')
