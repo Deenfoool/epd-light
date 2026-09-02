@@ -12,7 +12,8 @@ import {
 } from '../server/repositories/billing-events.mjs'
 
 const assert = (condition, message) => { if (!condition) throw new Error(message) }
-const migration = await readFile('supabase/migrations/202609020003_billing_payment_events.sql', 'utf8')
+const ledgerMigration = await readFile('supabase/migrations/202609020003_billing_payment_events.sql', 'utf8')
+const entitlementMigration = await readFile('supabase/migrations/202609020004_billing_entitlement_function.sql', 'utf8')
 const repository = await readFile('server/repositories/billing-events.mjs', 'utf8')
 
 for (const snippet of [
@@ -22,10 +23,23 @@ for (const snippet of [
   'billing_payment_events_provider_event_unique unique',
   'grant select on public.billing_payment_events to authenticated',
   'create role epd_billing_writer nologin noinherit',
-  'grant select, update on public.subscriptions to epd_billing_writer',
   'grant select, insert, update on public.billing_payment_events to epd_billing_writer',
-  'revoke insert, delete on public.subscriptions from epd_billing_writer',
-]) assert(migration.includes(snippet), `billing payment migration missing invariant: ${snippet}`)
+]) assert(ledgerMigration.includes(snippet), `billing payment ledger migration missing invariant: ${snippet}`)
+
+for (const snippet of [
+  'create or replace function public.apply_verified_billing_entitlement',
+  'security definer',
+  'set search_path = pg_catalog, public',
+  "v_event.event_status <> 'verified'",
+  "v_event.plan_code is distinct from p_plan_code",
+  "status = 'active'",
+  "event_status = 'applied'",
+  'grant execute on function public.apply_verified_billing_entitlement',
+  'revoke update on public.subscriptions from epd_billing_writer',
+  'revoke update on public.billing_payment_events from epd_billing_writer',
+  'drop policy if exists subscriptions_billing_writer_update',
+  'drop policy if exists billing_payment_events_writer_update',
+]) assert(entitlementMigration.includes(snippet), `billing entitlement migration missing invariant: ${snippet}`)
 
 for (const forbidden of [
   'grant insert on public.billing_payment_events to authenticated',
@@ -33,7 +47,7 @@ for (const forbidden of [
   'grant delete on public.billing_payment_events to authenticated',
   'create role epd_billing_writer login',
   'raw_payload', 'raw_webhook', 'card_number', 'cvv',
-]) assert(!migration.toLowerCase().includes(forbidden.toLowerCase()), `unsafe billing migration pattern: ${forbidden}`)
+]) assert(!ledgerMigration.toLowerCase().includes(forbidden.toLowerCase()), `unsafe billing migration pattern: ${forbidden}`)
 
 assert(BILLING_PAYMENT_POLICY.browserCanActivateSubscription === false, 'browser must not activate subscription')
 assert(BILLING_PAYMENT_POLICY.successRedirectAuthoritative === false, 'success redirect must never prove payment')
@@ -67,22 +81,30 @@ const cfg = billingEventRepositoryConfigFromEnv({
 const status = billingEventRepositoryStatus(cfg)
 assert(status.configured === true, 'billing repository should recognize restricted config')
 assert(status.rawWebhookPayloadStored === false && status.cardDataStored === false && status.secretsStored === false, 'billing repository capabilities must stay metadata-only')
+assert(status.directSubscriptionUpdateAllowed === false, 'billing runtime must not allow direct subscription update')
+assert(status.entitlementDatabaseFunctionRequired === true, 'verified-event DB function must be mandatory')
 assert(JSON.stringify(status).includes('secret') === false, 'billing repository status must not expose connection string')
 
 for (const snippet of [
   "set local role ${config.writerRole}",
-  "event_status='applied'",
-  "if (billingEvent.eventStatus !== 'verified')",
-  "status='active'",
+  'public.apply_verified_billing_entitlement(',
+  "if (existing.eventStatus !== 'verified')",
   'on conflict (provider, provider_event_id) do nothing',
   'billing_event_identity_conflict',
+  'directSubscriptionUpdateAllowed: false',
 ]) assert(repository.includes(snippet), `billing repository missing transaction/idempotency invariant: ${snippet}`)
 
-for (const forbidden of ['console.log(config.connectionString)', 'rawWebhookPayload', 'cardNumber', 'cvv', 'request.body']) {
-  assert(!repository.includes(forbidden), `billing repository may expose sensitive value: ${forbidden}`)
-}
+for (const forbidden of [
+  'update public.subscriptions',
+  "set event_status='applied'",
+  'console.log(config.connectionString)',
+  'rawWebhookPayload',
+  'cardNumber',
+  'cvv',
+  'request.body',
+]) assert(!repository.includes(forbidden), `billing repository may bypass DB boundary or expose sensitive value: ${forbidden}`)
 
 const caps = billingPublicCapabilities(billingConfigFromEnv({ EPD_BILLING_PROVIDER: 'none' }))
 assert(caps.checkoutEnabled === false && caps.webhookEnabled === false, 'billing public capabilities must stay fail-closed')
 
-console.log('Billing payment boundary test OK: verified-event ledger, restricted writer, idempotency and fail-closed payment policy verified')
+console.log('Billing payment boundary test OK: verified-event ledger, DB-enforced entitlement function, restricted writer and fail-closed payment policy verified')
