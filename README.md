@@ -21,7 +21,7 @@ MVP SaaS для подготовки, проверки и хранения **ч�
 - печатное превью с watermark черновика;
 - Integration JSON.
 
-### Operator backend
+### Backend / production safety
 
 - private gateway за nginx;
 - Supabase JWT/JWKS auth (`RS256/ES256`);
@@ -37,7 +37,12 @@ MVP SaaS для подготовки, проверки и хранения **ч�
 - SHA-256 idempotency по document revision;
 - persistent metadata-only `operator_attempts` journal через restricted PostgreSQL role;
 - история safe operator metadata на карточке документа;
-- `/api/operator/send` жёстко возвращает `503 operator_send_disabled`.
+- `/api/operator/send` жёстко возвращает `503 operator_send_disabled`;
+- `/healthz` — только liveness процесса;
+- `/api/system/version` — public-safe release/commit/build time запущенного gateway;
+- `/api/system/readiness` — технический baseline без утверждений о юридической/XSD/operator-production готовности;
+- production readiness требует traceable git commit/build time;
+- private dependency smoke-check проверяет реальный Supabase JWKS и Data API `billing_plans` без публикации URL/ключей/response body.
 
 ### Биллинг foundation
 
@@ -93,6 +98,7 @@ EPD_BILLING_PROVIDER=none
 ## Production baseline
 
 ```env
+EPD_RELEASE=0.1.0
 EPD_DEPLOYMENT_MODE=production
 EPD_OPERATOR_PROVIDER=none
 EPD_OPERATOR_MODE=disabled
@@ -103,6 +109,8 @@ EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_ANON_OR_PUBLISHABLE_KEY
 EPD_ALLOWED_ORIGINS=https://epd.example.ru
 EPD_BILLING_PROVIDER=none
 ```
+
+`deploy/server-day.sh` сам получает текущий git commit, ставит UTC build time в Compose и после запуска сверяет `/api/system/version` с исходным checkout. Если commit нельзя определить, production deploy останавливается.
 
 Production gateway сам откажется стартовать без Supabase auth. Billing checker не позволит случайно включить ещё не реализованный payment adapter.
 
@@ -130,6 +138,32 @@ unset EPD_MIGRATION_CONFIRM
 ```
 
 Guarded runner делает encrypted backup до/после, хранит SHA-256 применённых migration-файлов и запрещает незаметно переписывать уже применённые миграции.
+
+## Runtime checks
+
+Разные проверки имеют разный смысл:
+
+```text
+GET /healthz                 -> процесс gateway жив
+GET /api/system/version      -> какой release/commit/build time реально запущен
+GET /api/system/readiness    -> безопасный технический configuration baseline
+npm run deploy:dependencies:check -> реальная доступность Supabase Auth JWKS + Data API/migrations
+```
+
+`/api/system/readiness` специально возвращает `technicalReadinessOnly=true` и `legalReadinessClaimed=false`.
+
+Перед Docker launch `server-day` выполняет private network smoke-check:
+
+```text
+Supabase /auth/v1/.well-known/jwks.json
+ -> опубликован хотя бы один asymmetric key
+
+Supabase /rest/v1/billing_plans
+ -> Data API доступен
+ -> billing foundation migration реально видна
+```
+
+В ошибках этой проверки не печатаются URL, ключ API и body ответа.
 
 ## Persistent operator journal
 
@@ -220,6 +254,9 @@ unset EPD_RESTORE_TEST_CONFIRM
 ```bash
 npm run preflight
 npm run deploy:env:test
+npm run build-info:test
+npm run dependency:test
+npm run readiness:test
 npm run web-security:test
 npm run audit:test
 npm run authorization:test
@@ -236,6 +273,12 @@ npm run gateway:test
 npm run kontur:userdata:test
 npm run kontur:generation:test
 npm run kontur:sandbox:test
+```
+
+Production env с сетью:
+
+```bash
+npm run deploy:dependencies:check
 ```
 
 После `npm install`:
