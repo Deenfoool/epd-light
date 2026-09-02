@@ -27,6 +27,7 @@ jobs:
           node --check server/billing.mjs
           node --check server/idempotency.mjs
           node --check server/rate-limit.mjs
+          node --check server/readiness.mjs
           node --check server/mappers/operator-candidate.mjs
           node --check server/repositories/supabase-documents.mjs
           node --check server/repositories/operator-attempts.mjs
@@ -55,6 +56,7 @@ jobs:
           node --check scripts/test-billing-foundation.mjs
           node --check scripts/test-billing-payment-boundary.mjs
           node --check scripts/test-billing-payment-client.mjs
+          node --check scripts/test-readiness.mjs
           node --check scripts/test-web-security.mjs
           node --check scripts/test-rate-limit.mjs
           node --check scripts/test-gateway.mjs
@@ -72,6 +74,8 @@ jobs:
         run: npm run preflight
       - name: Deployment env policy
         run: npm run deploy:env:test
+      - name: Technical readiness policy
+        run: npm run readiness:test
       - name: Web security headers
         run: npm run web-security:test
       - name: Privacy-safe audit
