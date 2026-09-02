@@ -40,13 +40,16 @@ MVP SaaS-сервиса для подготовки, проверки и хра�
 - deterministic SHA-256 idempotency identity по `documentId + documents.updated_at + operation + operator contract`;
 - параллельные повторные sandbox-запросы одного revision схлопываются в один внешний `GenerateTitleXml` внутри gateway-процесса;
 - таблица `operator_attempts` подготовлена под безопасный persistent-журнал: пользователь может только читать свои metadata, но не создавать/подделывать operator outcomes;
-- кнопка `Kontur sandbox` на карточке документа появляется только когда backend сообщает `ready=true`;
+- **billing foundation**: каталог тарифов, 14-дневный trial, read-only subscription entitlement и месячный usage;
+- PostgreSQL сам считает создание новых документов и готов enforce-ить месячный лимит без доверия React/Data API клиенту;
+- billing enforcement пока намеренно `false`: эквайринг, webhooks, чеки и реальные списания ещё не подключены;
+- страница `/app/billing` показывает текущий plan/trial/usage и не позволяет менять тариф из браузера;
 - `/api/operator/send` остаётся жёстко заблокированным;
 - guarded database migration runner с SHA-256 registry и обязательными encrypted backup до/после миграций;
 - encrypted PostgreSQL backups: custom `pg_dump` → verify → AES-256/PBKDF2 → SHA-256 → restore drill в отдельную test DB;
 - Docker/HTTPS deployment-заготовки под будущий production VPS;
 - SQL-миграции Supabase с Row Level Security;
-- офлайн preflight и отдельные тесты auth/RLS/idempotency/Kontur/security boundaries.
+- офлайн preflight и отдельные тесты auth/RLS/idempotency/billing/Kontur/security boundaries.
 
 ## Быстрый запуск
 
@@ -66,6 +69,7 @@ npm run dev
 supabase/migrations/202609010001_init.sql
 supabase/migrations/202609010002_extend_directories_t1.sql
 supabase/migrations/202609010003_operator_attempts.sql
+supabase/migrations/202609020001_billing_foundation.sql
 ```
 
 Для production не следует накатывать их вручную по одной. После настройки `EPD_DATABASE_URL` и encrypted backup env используйте guarded runner:
@@ -91,6 +95,7 @@ npm run audit:test
 npm run authorization:test
 npm run repository:test
 npm run idempotency:test
+npm run billing:test
 npm run rate-limit:test
 npm run gateway:test
 npm run kontur:provider:test
@@ -114,6 +119,28 @@ npm run preview
 ```
 
 GitHub Actions workflow поддерживает ручной запуск: `Actions → CI → Run workflow`. Коммиты, созданные текущим GitHub App connector, сами workflow не запускают, поэтому факт зелёного CI нужно подтверждать отдельным run.
+
+## Биллинг
+
+Тарифный foundation уже существует, но реальных денег пока нет.
+
+Предварительные тарифы:
+
+```text
+Старт    990 ₽ / мес    50 новых черновиков
+Бизнес 2 490 ₽ / мес   500 новых черновиков
+Команда 4 990 ₽ / мес 2000 новых черновиков
+```
+
+Новый аккаунт получает trial entitlement. `billing_usage_monthly` считает фактические INSERT документов, а browser JWT может только читать свою подписку и usage. `subscriptions` и usage нельзя переписать напрямую из frontend.
+
+До подключения payment provider:
+
+```text
+billing_settings.enforcement_enabled = false
+```
+
+То есть usage уже собирается, но отсутствие оплаты никого не блокирует. Подробности: [`docs/BILLING.md`](docs/BILLING.md).
 
 ## Backup/recovery
 
@@ -224,14 +251,18 @@ GenerateTitleXml -> signing -> PostMessage -> operator statuses -> GIS EPD
 - подключить server-owned persistent operator-attempt writer/idempotency без browser write-доступа;
 - определить и реализовать signing flow;
 - только после этого проектировать `PostMessage` и юридически значимые статусы;
+- выбрать платёжного провайдера и реализовать server-side checkout + verified webhooks;
+- решить чеки/54-ФЗ и договорную модель до реальных списаний;
+- только после полного payment smoke-test включать billing enforcement;
 - развернуть production-контур данных в РФ;
 - настроить домен, HTTPS, offsite backups, мониторинг и recovery;
-- завершить правовые документы, security-тесты и биллинг.
+- завершить правовые документы и security-тесты.
 
 ## Документация
 
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
 - [`docs/BACKUP-RECOVERY.md`](docs/BACKUP-RECOVERY.md)
+- [`docs/BILLING.md`](docs/BILLING.md)
 - [`docs/BACKEND-GATEWAY.md`](docs/BACKEND-GATEWAY.md)
 - [`docs/OPERATOR-INTEGRATION.md`](docs/OPERATOR-INTEGRATION.md)
 - [`docs/FNS-ETRN-MAPPING.md`](docs/FNS-ETRN-MAPPING.md)
