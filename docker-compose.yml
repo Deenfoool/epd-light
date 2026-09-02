@@ -21,6 +21,7 @@ services:
       context: ./server
     environment:
       PORT: "8787"
+      EPD_DEPLOYMENT_MODE: ${EPD_DEPLOYMENT_MODE:-local}
       EPD_OPERATOR_PROVIDER: ${EPD_OPERATOR_PROVIDER:-none}
       EPD_OPERATOR_MODE: ${EPD_OPERATOR_MODE:-disabled}
       EPD_MAX_BODY_BYTES: ${EPD_MAX_BODY_BYTES:-524288}
