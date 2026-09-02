@@ -75,6 +75,9 @@ run_node scripts/test-kontur-userdata.mjs
 run_node scripts/test-kontur-generation.mjs
 run_node scripts/test-kontur-sandbox.mjs
 
+echo "== Production migration registry =="
+sh "$ROOT_DIR/deploy/check-migrations.sh" "$ENV_FILE"
+
 echo "== Production dependency smoke check =="
 run_node scripts/check-runtime-dependencies.mjs
 
@@ -171,6 +174,7 @@ printf '%s' "$HEADERS" | grep -qi 'X-Content-Type-Options: nosniff' || { echo "E
 
 echo "== Deployment started safely =="
 echo "Runtime commit verified: $BUILD_COMMIT"
+echo "Production migration registry exactly matches this checkout."
 echo "Supabase Auth JWKS and Data API billing foundation were reachable before launch."
 echo "Project HTTP is bound to 127.0.0.1:8080. Put an HTTPS reverse proxy in front of it before public access."
 echo "Technical production baseline is ready; this check does not claim legal or operator-production readiness."
