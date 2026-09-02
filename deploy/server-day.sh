@@ -41,6 +41,7 @@ run_node scripts/preflight-runtime.mjs
 run_node scripts/preflight.mjs
 run_node scripts/test-deployment-env.mjs
 run_node scripts/test-billing-env.mjs
+run_node scripts/test-readiness.mjs
 run_node scripts/test-web-security.mjs
 run_node scripts/test-audit.mjs
 run_node scripts/test-authorization.mjs
@@ -110,6 +111,22 @@ do
 done
 printf '%s\n' "$BILLING_CAPS"
 
+echo "== Technical readiness =="
+READINESS="$(dc exec -T web wget -q -O - http://127.0.0.1:8080/api/system/readiness)"
+for EXPECTED in \
+  '"technicalReadinessOnly":true' \
+  '"legalReadinessClaimed":false' \
+  '"productionBaselineReady":true' \
+  '"sensitiveValuesIncluded":false'
+do
+  if ! printf '%s' "$READINESS" | grep -q "$EXPECTED"; then
+    echo "ERROR: technical readiness invariant failed: $EXPECTED" >&2
+    printf '%s\n' "$READINESS" >&2
+    exit 1
+  fi
+done
+printf '%s\n' "$READINESS"
+
 echo "== Web security headers =="
 HEADERS="$(dc exec -T web wget -S -O /dev/null http://127.0.0.1:8080/ 2>&1 || true)"
 printf '%s' "$HEADERS" | grep -qi 'Content-Security-Policy:' || { echo "ERROR: CSP header missing" >&2; exit 1; }
@@ -118,4 +135,5 @@ printf '%s' "$HEADERS" | grep -qi 'X-Content-Type-Options: nosniff' || { echo "E
 
 echo "== Deployment started safely =="
 echo "Project HTTP is bound to 127.0.0.1:8080. Put an HTTPS reverse proxy in front of it before public access."
+echo "Technical production baseline is ready; this check does not claim legal or operator-production readiness."
 echo "Billing provider, checkout, webhook and real money are confirmed disabled."
