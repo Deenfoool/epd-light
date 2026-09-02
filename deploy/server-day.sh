@@ -35,8 +35,10 @@ dc() {
 echo "== EPD Light server-day prechecks =="
 run_node scripts/check-deployment-env.mjs
 run_node scripts/preflight-deploy.mjs
+run_node scripts/preflight-runtime.mjs
 run_node scripts/preflight.mjs
 run_node scripts/test-deployment-env.mjs
+run_node scripts/test-web-security.mjs
 run_node scripts/test-audit.mjs
 run_node scripts/test-authorization.mjs
 run_node scripts/test-supabase-repository.mjs
@@ -84,6 +86,12 @@ if printf '%s' "$CAPS" | grep -q '"mode":"sandbox"'; then
   fi
 fi
 printf '%s\n' "$CAPS"
+
+echo "== Web security headers =="
+HEADERS="$(dc exec -T web wget -S -O /dev/null http://127.0.0.1:8080/ 2>&1 || true)"
+printf '%s' "$HEADERS" | grep -qi 'Content-Security-Policy:' || { echo "ERROR: CSP header missing" >&2; exit 1; }
+printf '%s' "$HEADERS" | grep -qi 'X-Frame-Options: DENY' || { echo "ERROR: X-Frame-Options header missing" >&2; exit 1; }
+printf '%s' "$HEADERS" | grep -qi 'X-Content-Type-Options: nosniff' || { echo "ERROR: nosniff header missing" >&2; exit 1; }
 
 echo "== Deployment started safely =="
 echo "Project HTTP is bound to 127.0.0.1:8080. Put an HTTPS reverse proxy in front of it before public access."
