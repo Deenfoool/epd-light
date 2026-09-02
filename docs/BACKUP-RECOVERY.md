@@ -14,6 +14,7 @@ production PostgreSQL
   -> SHA-256
   -> локальная защищённая копия
   -> отдельная копия вне основного VPS
+  -> production freshness gate
   -> периодический restore drill в отдельную тестовую БД
 ```
 
@@ -27,6 +28,7 @@ production PostgreSQL
 EPD_DATABASE_URL=postgresql://USER:PASSWORD@DB_HOST:5432/DB_NAME
 EPD_BACKUP_DIR=.backups
 EPD_BACKUP_RETENTION_DAYS=14
+EPD_BACKUP_MAX_AGE_HOURS=30
 EPD_BACKUP_PASSPHRASE=LONG_RANDOM_SECRET_DIFFERENT_FROM_DB_PASSWORD
 EPD_POSTGRES_CLIENT_IMAGE=postgres:17-alpine
 ```
@@ -38,7 +40,8 @@ EPD_POSTGRES_CLIENT_IMAGE=postgres:17-alpine
 - backup passphrase должна отличаться от пароля БД;
 - passphrase хранится отдельно от самих backup-файлов;
 - `.backups`, `*.dump*` исключены из Git и Docker build context;
-- production env не коммитится.
+- production env не коммитится;
+- `EPD_BACKUP_MAX_AGE_HOURS` — допустимый возраст последнего backup перед production deploy; проект по умолчанию использует 30 часов.
 
 ## Создать backup
 
@@ -92,6 +95,39 @@ npm run backup:verify -- /absolute/path/epd-light-20260916T030000Z.dump.enc
 
 Проверка не изменяет БД.
 
+## Production backup readiness
+
+Перед каждым `server-day` проект требует не просто наличие настроек, а **реально существующий свежий и читаемый backup**:
+
+```bash
+npm run backup:readiness -- .env.production
+```
+
+`deploy/check-backup-readiness.sh`:
+
+1. безопасно читает только backup-настройки из `.env.production`, без `source` и `eval`;
+2. находит самый свежий `epd-light-*.dump.enc`;
+3. требует `.sha256` sidecar;
+4. проверяет возраст относительно `EPD_BACKUP_MAX_AGE_HOURS`;
+5. вызывает обычный verifier;
+6. требует успешные SHA-256, decrypt и `pg_restore --list`.
+
+Fail-closed причины включают:
+
+```text
+backup directory missing
+no encrypted backup
+checksum sidecar missing
+backup timestamp in future
+backup stale
+wrong passphrase/decrypt failure
+invalid pg_restore archive
+```
+
+`EPD_BACKUP_MAX_AGE_HOURS` разрешён в диапазоне 1–168 часов. Для ежедневного backup baseline — 30 часов, чтобы небольшой сдвиг timer не ломал deployment при нормальной работе.
+
+`deploy/server-day.sh` выполняет этот gate **до network smoke-check и Docker build/start**.
+
 ## Restore drill
 
 **Никогда не запускайте restore drill на production URL.**
@@ -134,6 +170,8 @@ npm run backup:restore:test -- /absolute/path/epd-light-20260916T030000Z.dump.en
 
 Допустимы отдельный объектный storage/второй сервер/защищённое backup-хранилище в выбранном production-контуре. Конкретный offsite provider намеренно не зашит в проект до выбора инфраструктуры.
 
+Важно: текущий `backup:readiness` подтверждает локальный encrypted archive, но **не доказывает существование offsite copy**. Перед первыми реальными клиентами offsite backup должен быть настроен и отдельно контролироваться.
+
 ## Retention
 
 По умолчанию:
@@ -153,6 +191,7 @@ Offsite retention настраивается отдельно на сторон�
 - encrypted backup: ежедневно;
 - offsite copy: после каждого backup;
 - автоматическая verify: при каждом создании;
+- production freshness gate: при каждом deploy;
 - restore drill: минимум раз в месяц и после серьёзных изменений схемы/инфраструктуры;
 - дополнительный backup: перед миграциями БД и крупным deploy.
 
@@ -164,9 +203,16 @@ Offsite retention настраивается отдельно на сторон�
 1. создать encrypted backup
 2. verify проходит
 3. убедиться, что offsite copy существует
-4. применить миграцию
-5. smoke test приложения/RLS
-6. создать новый post-migration backup
+4. применить migration guarded runner'ом
+5. проверить exact migration registry + SHA-256
+6. создать/проверить post-migration backup
+7. smoke test приложения/RLS
+```
+
+Команда проверки schema registry:
+
+```bash
+npm run db:migrations:check -- .env.production
 ```
 
 ## RPO/RTO для первой production-версии
@@ -190,7 +236,7 @@ Backup tooling не должно писать в stdout/logs:
 - содержимое таблиц;
 - расшифрованный dump.
 
-Metadata-файл содержит только время, формат, имя client image и filename.
+Metadata-файл содержит только безопасные технические metadata, а не passphrase или содержимое БД.
 
 ## Чек-лист первого production backup
 
@@ -199,6 +245,7 @@ Metadata-файл содержит только время, формат, имя
 - [ ] backup-файлы имеют права `600`;
 - [ ] `npm run backup:create` завершился успешно;
 - [ ] `npm run backup:verify -- <file>` проходит;
+- [ ] `npm run backup:readiness -- .env.production` проходит;
 - [ ] encrypted triplet скопирован вне VPS;
 - [ ] backup passphrase не лежит рядом с backup;
 - [ ] создана отдельная restore-test БД;
