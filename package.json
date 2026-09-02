@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "preflight": "node scripts/preflight-deploy.mjs && node scripts/preflight-migrations.mjs && node scripts/preflight-billing.mjs && node scripts/preflight-runtime.mjs && node scripts/preflight.mjs",
+    "preflight": "node scripts/preflight-deploy.mjs && node scripts/preflight-migrations.mjs && node scripts/preflight-backup.mjs && node scripts/preflight-billing.mjs && node scripts/preflight-runtime.mjs && node scripts/preflight.mjs",
     "deploy:check": "node scripts/check-deployment-env.mjs && node scripts/check-billing-env.mjs",
     "deploy:env:test": "node scripts/test-deployment-env.mjs && node scripts/test-billing-env.mjs",
     "deploy:dependencies:check": "node scripts/check-runtime-dependencies.mjs",
@@ -13,6 +13,7 @@
     "db:migrations:check": "sh deploy/check-migrations.sh",
     "backup:create": "sh deploy/backup-postgres.sh",
     "backup:verify": "sh deploy/verify-postgres-backup.sh",
+    "backup:readiness": "sh deploy/check-backup-readiness.sh",
     "backup:restore:test": "sh deploy/test-restore-postgres.sh",
     "audit:test": "node scripts/test-audit.mjs",
     "auth:test": "node scripts/test-auth.mjs",
