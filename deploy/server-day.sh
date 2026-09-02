@@ -34,10 +34,12 @@ dc() {
 
 echo "== EPD Light server-day prechecks =="
 run_node scripts/check-deployment-env.mjs
+run_node scripts/check-billing-env.mjs
 run_node scripts/preflight-deploy.mjs
 run_node scripts/preflight-runtime.mjs
 run_node scripts/preflight.mjs
 run_node scripts/test-deployment-env.mjs
+run_node scripts/test-billing-env.mjs
 run_node scripts/test-web-security.mjs
 run_node scripts/test-audit.mjs
 run_node scripts/test-authorization.mjs
@@ -46,6 +48,7 @@ run_node scripts/test-operator-attempt-repository.mjs
 run_node scripts/test-operator-attempt-client.mjs
 run_node scripts/test-idempotency.mjs
 run_node scripts/test-billing-foundation.mjs
+run_node scripts/test-billing-payment-boundary.mjs
 run_node scripts/test-rate-limit.mjs
 run_node scripts/test-gateway.mjs
 run_node scripts/test-kontur-userdata.mjs
@@ -95,3 +98,4 @@ printf '%s' "$HEADERS" | grep -qi 'X-Content-Type-Options: nosniff' || { echo "E
 
 echo "== Deployment started safely =="
 echo "Project HTTP is bound to 127.0.0.1:8080. Put an HTTPS reverse proxy in front of it before public access."
+echo "Billing provider must remain disabled until a verified provider adapter/webhook is deliberately implemented."
