@@ -2,11 +2,24 @@
 
 `server/index.mjs` — private server-side контур для проверки черновиков и будущей интеграции с оператором ИС ЭПД.
 
-Gateway принципиально разделяет три режима:
+Gateway разделяет три уровня:
 
-1. локальные проверки/preview без внешнего оператора;
+1. local preflight/UserDataXml preview;
 2. контролируемый sandbox `GenerateTitleXml`;
 3. production signing/`PostMessage`, который пока **не реализован**.
+
+## Deployment/auth mode
+
+`EPD_DEPLOYMENT_MODE` имеет два допустимых значения:
+
+```text
+local
+production
+```
+
+`local` нужен для demo/dev. При `production` gateway **не стартует**, если `EPD_GATEWAY_AUTH_MODE != supabase`, даже когда `EPD_OPERATOR_MODE=disabled`.
+
+Это runtime-защита, а не только правило deployment checker.
 
 ## Архитектура
 
@@ -19,6 +32,7 @@ nginx
   |
   v
 private gateway
+  |-- production-mode guard
   |-- JWT/JWKS verification
   |-- rate limiting
   |-- privacy-safe audit
@@ -33,119 +47,134 @@ Supabase Data API under USER JWT
 canonical documents row
   |
   v
-server mapper -> ownership check -> UserDataXml
+server mapper -> ownership -> SHA-256 action identity
+  |
+  | optional persistent metadata claim
+  v
+restricted PostgreSQL operator_attempts writer
   |
   v
 Kontur GenerateTitleXml
 ```
 
-Порт gateway `8787` наружу не публикуется. nginx проксирует `/api/*` во внутреннюю Docker-сеть.
+Gateway port `8787` наружу не публикуется.
 
 ## Authentication
 
-При `EPD_GATEWAY_AUTH_MODE=supabase` gateway проверяет Supabase access token через JWKS:
+При `EPD_GATEWAY_AUTH_MODE=supabase` access token проверяется через:
 
 ```text
 /auth/v1/.well-known/jwks.json
 ```
 
-Проверяются подпись, issuer, audience, срок действия и `role=authenticated`. Используется allow-list асимметричных алгоритмов `RS256/ES256`.
+Проверяются signature, issuer, audience, expiration и `role=authenticated`. Allow-list алгоритмов: `RS256/ES256`.
 
-Общий JWT secret и `service_role` для gateway auth не используются.
+Shared JWT secret и `service_role` не используются.
 
-Внутри успешного auth-result пользовательский access token хранится non-enumerable: он нужен только для server-to-server RLS-запроса и не должен случайно сериализоваться в JSON/logs.
-
-В `EPD_OPERATOR_MODE != disabled` gateway вообще не стартует с отключённой auth-моделью.
+Проверенный user access token хранится в auth-result non-enumerable и используется только server-side для RLS Data API reload.
 
 ## Authorization и canonical document
 
-Для внешнего operator-вызова недостаточно проверить JWT. Браузерский Integration JSON считается **неавторитетным**.
+Браузерский Integration JSON неавторитетен для внешнего вызова.
 
-Sandbox flow принимает только `documentId`, после чего backend:
+Sandbox принимает только `documentId`, затем backend:
 
-1. использует уже проверенный пользовательский JWT;
-2. читает `/rest/v1/documents?id=eq.<documentId>`;
-3. передаёт публичный anon/publishable key в `apikey`;
-4. передаёт пользовательский JWT в `Authorization`;
-5. полагается на существующую RLS `auth.uid() = user_id`;
-6. заново строит canonical operator candidate;
-7. повторно сравнивает `row.user_id` с JWT `sub`;
-8. только после этого разрешает `GenerateTitleXml`.
+1. проверяет JWT;
+2. читает `documents` через Supabase Data API под тем же USER JWT;
+3. RLS ограничивает доступ;
+4. заново строит canonical candidate;
+5. сверяет `row.user_id` с JWT `sub`;
+6. вычисляет idempotency identity по canonical revision;
+7. только после этого допускает внешний operator call.
 
-`service_role` этому пути не нужен и не должен использоваться.
+`service_role` здесь не нужен.
+
+## Persistent operator journal
+
+`public.operator_attempts` хранит только безопасные metadata:
+
+- user/document UUID;
+- provider/operation/mode;
+- `documents.updated_at` revision;
+- SHA-256 `idempotency_key`;
+- SHA-256 `request_fingerprint`;
+- status;
+- safe error code;
+- внешние технические ID, когда они появятся.
+
+XML, Integration JSON, токены и ПД туда не пишутся.
+
+Browser JWT имеет только `SELECT` своих записей через RLS и не может создавать/менять operator outcome.
+
+Server writer подключается опционально:
+
+```env
+EPD_GATEWAY_DATABASE_URL=postgresql://RESTRICTED_LOGIN:...@DB/epd_light
+EPD_GATEWAY_DATABASE_ROLE=epd_gateway_writer
+EPD_OPERATOR_ATTEMPT_STALE_MS=300000
+```
+
+Пятая миграция создаёт `epd_gateway_writer` как `NOLOGIN` capability-role. Реальный LOGIN создаётся отдельно и получает membership. Репозиторий выполняет `SET LOCAL ROLE epd_gateway_writer` внутри транзакции.
+
+Если repository не настроен, работает только in-process concurrent dedupe. Если настроен — успешный action survives restart и повтор той же revision блокируется до operator API.
 
 ## Rate limiting
 
-В памяти gateway действуют три независимых лимита:
-
-- `EPD_AUTH_ATTEMPT_LIMIT_MAX` — до авторизации, по безопасному сетевому ключу;
-- `EPD_RATE_LIMIT_MAX` — обычные operator API запросы, по хешу JWT `sub`;
-- `EPD_EXTERNAL_RATE_LIMIT_MAX` — более строгий лимит реальных внешних обращений к оператору.
-
-Окно задаётся `EPD_RATE_LIMIT_WINDOW_MS`.
-
-Gateway возвращает `RateLimit-*` и `Retry-After` при `429`.
-
-nginx перезаписывает `X-Real-IP` и `X-Forwarded-For`, чтобы клиент не мог выбирать rate-limit bucket подложенным первым XFF-hop.
+- `EPD_AUTH_ATTEMPT_LIMIT_MAX` — до auth;
+- `EPD_RATE_LIMIT_MAX` — обычные operator API;
+- `EPD_EXTERNAL_RATE_LIMIT_MAX` — реальные внешние operator calls;
+- окно: `EPD_RATE_LIMIT_WINDOW_MS`.
 
 ## Endpoints
 
 ### `GET /healthz`
 
-Healthcheck процесса.
+Process health.
 
 ### `GET /api/operator/capabilities`
 
-Публичные безопасные capability-метаданные. Секреты не возвращаются.
+Возвращает только безопасные capability metadata:
 
-В ответе можно увидеть:
-
-- текущий `mode`;
+- mode/provider;
 - auth policy;
 - rate limits;
-- готовность RLS repository;
-- готовность Kontur credentials;
-- готовность sandbox route;
+- RLS repository status;
+- Kontur adapter status;
+- sandbox readiness;
+- `persistentAttemptJournal` status;
 - `externalSendEnabled=false`.
+
+Connection strings, keys и tokens не возвращаются.
 
 ### `POST /api/operator/preflight`
 
-Авторизованный structural preflight Integration JSON.
-
-Не является XSD-валидацией и не обращается к Контур.
+Авторизованный structural preflight Integration JSON. Не XSD и без Контур API.
 
 ### `POST /api/operator/kontur/userdata-preview`
 
-Авторизованно строит локальный T1 `UserDataXml` preview.
+Локальный T1 UserDataXml preview:
 
-- external call: нет;
-- XSD validation: нет;
-- signing: нет;
-- PostMessage: нет.
-
-Для UI/разработки браузерский Integration JSON здесь допустим, потому что endpoint ничего не отправляет наружу.
+```text
+external call = false
+xsd validation = false
+signed = false
+sent = false
+```
 
 ### `POST /api/operator/kontur/generate-title-sandbox`
 
-Реальный внешний sandbox-вызов `GenerateTitleXml`.
+Реальный внешний sandbox `GenerateTitleXml`.
 
-Endpoint активен только если одновременно:
+Требует:
 
 ```env
+EPD_DEPLOYMENT_MODE=production
 EPD_OPERATOR_PROVIDER=kontur
 EPD_OPERATOR_MODE=sandbox
 EPD_GATEWAY_AUTH_MODE=supabase
 ```
 
-и настроены:
-
-- Supabase auth URL;
-- Supabase Data API URL;
-- публичный anon/publishable key;
-- Kontur BoxId;
-- Kontur access token.
-
-Тело запроса **строго**:
+Request body строго:
 
 ```json
 {
@@ -153,65 +182,53 @@ EPD_GATEWAY_AUTH_MODE=supabase
 }
 ```
 
-Любые дополнительные поля, включая `candidate`, `data`, `xml`, отклоняются. Это защищает внешний вызов от подмены документа клиентом.
+Дополнительные `candidate/data/xml/idempotencyKey` отклоняются.
 
-Успешный ответ содержит сгенерированный XML и явные признаки:
+При persistent journal возможны безопасные fail-closed ответы:
 
-```json
-{
-  "externalCallMade": true,
-  "signed": false,
-  "sent": false
-}
+```text
+sandbox_already_generated
+sandbox_generation_in_progress
+operator_attempt_journal_update_failed
 ```
 
-Endpoint **не вызывает** `PostMessage`.
+`GenerateTitleXml` result:
+
+```text
+signed=false
+sent=false
+```
+
+`PostMessage` не вызывается.
 
 ### `POST /api/operator/send`
 
-Всегда отвечает:
+Всегда:
 
 ```text
 503 operator_send_disabled
 ```
 
-Даже при `EPD_OPERATOR_MODE=sandbox`.
-
 ## Privacy-safe audit
 
-`server/audit.mjs` пишет только allow-list метаданных:
+Логируется только allow-list:
 
-```json
-{
-  "event": "gateway_request",
-  "ts": "2026-09-01T12:00:00.000Z",
-  "requestId": "...",
-  "method": "POST",
-  "path": "/api/operator/preflight",
-  "provider": "kontur",
-  "httpStatus": 422,
-  "durationMs": 12,
-  "errorCode": "candidate_invalid"
-}
+```text
+requestId
+method
+path
+provider
+httpStatus
+durationMs
+safe errorCode
 ```
 
-Не логируются:
-
-- request body;
-- Integration JSON;
-- UserDataXml/generated XML;
-- query string;
-- headers;
-- access/refresh/operator tokens;
-- BoxId документа;
-- ФИО, телефон, адрес, ИНН, ВУ;
-- свободный exception text.
+Не логируются body, XML, query string, headers, JWT/operator token, ФИО, адреса, телефоны, ИНН, ВУ.
 
 ## Env
 
-Основные server-side параметры:
-
 ```env
+EPD_DEPLOYMENT_MODE=local
 EPD_OPERATOR_PROVIDER=none
 EPD_OPERATOR_MODE=disabled
 EPD_GATEWAY_AUTH_MODE=disabled
@@ -219,6 +236,9 @@ EPD_AUTH_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 EPD_AUTH_AUDIENCE=authenticated
 EPD_DATA_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 EPD_DATA_SUPABASE_PUBLIC_KEY=PUBLIC_KEY
+EPD_GATEWAY_DATABASE_URL=
+EPD_GATEWAY_DATABASE_ROLE=epd_gateway_writer
+EPD_OPERATOR_ATTEMPT_STALE_MS=300000
 EPD_RATE_LIMIT_WINDOW_MS=60000
 EPD_RATE_LIMIT_MAX=60
 EPD_AUTH_ATTEMPT_LIMIT_MAX=120
@@ -227,7 +247,7 @@ EPD_KONTUR_BOX_ID=
 EPD_KONTUR_ACCESS_TOKEN=
 ```
 
-Никакие server secrets не должны попадать в `VITE_*`.
+Для production `EPD_DEPLOYMENT_MODE=production` и `EPD_GATEWAY_AUTH_MODE=supabase` обязательны.
 
 ## Проверки
 
@@ -237,6 +257,8 @@ npm run audit:test
 npm run auth:test
 npm run authorization:test
 npm run repository:test
+npm run attempt-repository:test
+npm run idempotency:test
 npm run rate-limit:test
 npm run gateway:test
 npm run gateway:auth:test
@@ -245,15 +267,12 @@ npm run kontur:generation:test
 npm run kontur:sandbox:test
 ```
 
-`kontur:sandbox:test` использует только mock fetch и проверяет цепочку `documentId -> user JWT/RLS repository -> canonical mapper -> ownership -> GenerateTitleXml`, не обращаясь к реальному Контур.
-
-## Что всё ещё запрещено
-
-До отдельного signing flow и реального операторского тестирования нельзя открывать:
+## Всё ещё запрещено
 
 - `PostMessage`;
 - production send;
-- статусы «передан/подписан/принят» по пользовательскому клику;
-- хранение operator access token во frontend;
-- доверие клиентскому XML/Integration JSON для внешнего вызова;
-- `service_role` как обход RLS в пользовательском operator flow.
+- signing;
+- клиентский XML/Integration JSON как источник внешнего вызова;
+- `service_role` как обход user RLS;
+- admin DB credential в gateway runtime;
+- application logs с документом/ПД/секретами.
