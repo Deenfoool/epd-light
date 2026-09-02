@@ -18,6 +18,9 @@ requireAll('.dockerignore', dockerignore, ['.git', '.env', '.env.*', 'node_modul
 const compose = await read('docker-compose.yml')
 requireAll('docker-compose.yml', compose, [
   '"127.0.0.1:8080:8080"',
+  'EPD_RELEASE: ${EPD_RELEASE:-0.1.0}',
+  'EPD_BUILD_COMMIT: ${EPD_BUILD_COMMIT:-}',
+  'EPD_BUILD_TIME: ${EPD_BUILD_TIME:-}',
   'EPD_DEPLOYMENT_MODE',
   'EPD_EXTERNAL_RATE_LIMIT_MAX',
   'EPD_DATA_SUPABASE_PUBLIC_KEY',
@@ -60,9 +63,17 @@ requireAll('server-day.sh', serverDay, [
   'scripts/test-operator-attempt-client.mjs',
   'scripts/test-idempotency.mjs',
   'scripts/test-billing-foundation.mjs',
+  'BUILD_COMMIT=',
+  'git rev-parse --verify HEAD',
+  'EPD_BUILD_COMMIT="$BUILD_COMMIT"',
+  'EPD_BUILD_TIME="$BUILD_TIME"',
+  '/api/system/version',
+  '"traceableBuild":true',
+  'runtime version does not match deployment source',
   'persistentAttemptJournal',
   '/api/system/readiness',
   '"productionBaselineReady":true',
+  '"traceableRuntimeBuild":true',
   '"legalReadinessClaimed":false',
   '"sensitiveValuesIncluded":false',
   'Content-Security-Policy:',
@@ -70,6 +81,15 @@ requireAll('server-day.sh', serverDay, [
   'externalSendEnabled',
   '127.0.0.1:8080',
 ])
+
+const buildInfo = await read('server', 'build-info.mjs')
+requireAll('runtime build info', buildInfo, [
+  'EPD_RELEASE', 'EPD_BUILD_COMMIT', 'EPD_BUILD_TIME',
+  'traceableBuild:', 'shortCommit:', 'sensitiveValuesIncluded: false',
+])
+for (const forbidden of ['EPD_DATABASE_URL', 'EPD_KONTUR_ACCESS_TOKEN', 'EPD_BILLING_DATABASE_URL']) {
+  if (buildInfo.includes(forbidden)) fail(`build info module must not read secret env: ${forbidden}`)
+}
 
 const backup = await read('deploy', 'backup-postgres.sh')
 requireAll('backup-postgres.sh', backup, [
@@ -132,13 +152,25 @@ requireAll('technical readiness', readiness, [
   'technicalReadinessOnly: true',
   'legalReadinessClaimed: false',
   'productionBaselineReady: Object.values(checks).every(Boolean)',
+  'traceableRuntimeBuild: traceableBuild',
   'sensitiveValuesIncluded: false',
   'operatorProductionSendDisabled: true',
   'billingFailClosed',
 ])
 
+const gateway = await read('server', 'index.mjs')
+requireAll('system runtime routes', gateway, [
+  "url.pathname === '/api/system/version'",
+  '...publicBuildInfo',
+  "url.pathname === '/api/system/readiness'",
+  'buildInfo: publicBuildInfo',
+])
+
 const envExample = await read('.env.example')
 requireAll('.env.example', envExample, [
+  'EPD_RELEASE=0.1.0',
+  '# EPD_BUILD_COMMIT=',
+  '# EPD_BUILD_TIME=',
   'EPD_DEPLOYMENT_MODE=local',
   'EPD_DEPLOYMENT_MODE=production',
   'EPD_GATEWAY_AUTH_MODE=disabled',
@@ -156,7 +188,7 @@ requireAll('.env.example', envExample, [
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test', 'readiness:test', 'web-security:test']) {
+for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test', 'build-info:test', 'readiness:test', 'web-security:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 if (pkg.dependencies?.pg !== '8.23.0') fail('root pg dependency must stay pinned to 8.23.0')
@@ -168,4 +200,4 @@ for (const [section, dependencies] of Object.entries({ dependencies: pkg.depende
   }
 }
 
-console.log('Deploy preflight OK: production readiness endpoint, explicit production mode, CSP/header inheritance, safe journals, guarded migrations, billing fail-closed, loopback binding, HTTPS edge and encrypted recovery safeguards verified')
+console.log('Deploy preflight OK: traceable runtime commit/version, production readiness endpoint, explicit production mode, CSP/header inheritance, safe journals, guarded migrations, billing fail-closed, loopback binding, HTTPS edge and encrypted recovery safeguards verified')
