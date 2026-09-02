@@ -23,6 +23,7 @@
     "billing-payment:test": "node scripts/test-billing-payment-boundary.mjs",
     "billing-payment-client:test": "node scripts/test-billing-payment-client.mjs",
     "billing-env:test": "node scripts/test-billing-env.mjs",
+    "build-info:test": "node scripts/test-build-info.mjs",
     "readiness:test": "node scripts/test-readiness.mjs",
     "web-security:test": "node scripts/test-web-security.mjs",
     "rate-limit:test": "node scripts/test-rate-limit.mjs",
