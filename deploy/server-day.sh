@@ -56,6 +56,7 @@ run_node scripts/preflight-runtime.mjs
 run_node scripts/preflight.mjs
 run_node scripts/test-deployment-env.mjs
 run_node scripts/test-billing-env.mjs
+run_node scripts/test-build-info.mjs
 run_node scripts/test-readiness.mjs
 run_node scripts/test-web-security.mjs
 run_node scripts/test-audit.mjs
