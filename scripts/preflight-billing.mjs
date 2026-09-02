@@ -47,6 +47,25 @@ for (const forbidden of ['console.log(config.connectionString)', 'rawWebhookPayl
   if (repository.includes(forbidden)) fail(`billing repository contains forbidden sensitive pattern: ${forbidden}`)
 }
 
+const browserClient = await read('src', 'billing-events.ts')
+requireAll('billing history client', browserClient, [
+  "from('billing_payment_events')",
+  '.select(SAFE_PAYMENT_EVENT_COLUMNS)',
+  "'provider'", "'event_type'", "'event_status'", "'plan_code'", "'amount_kopecks'", "'currency'", "'safe_error_code'", "'created_at'", "'processed_at'",
+])
+for (const forbidden of ['provider_event_id', 'payload_sha256', 'user_id', '.insert(', '.update(', '.upsert(', '.delete(']) {
+  if (browserClient.includes(forbidden)) fail(`billing history browser client contains forbidden field/write: ${forbidden}`)
+}
+
+const app = await read('src', 'app-chunks', 'App.29.part')
+requireAll('billing history UI', app, [
+  'История платежных событий',
+  'listBillingPaymentEvents(20)',
+  'billingPaymentEventStatusLabel',
+  'Success redirect никогда не считается доказательством оплаты',
+])
+if (app.includes('provider_event_id') || app.includes('payload_sha256')) fail('billing UI must not render provider identifiers or payload hashes')
+
 const billingPolicy = await read('server', 'billing.mjs')
 requireAll('billing policy', billingPolicy, [
   "provider: 'none'",
@@ -85,14 +104,16 @@ requireAll('docker-compose billing', compose, [
 const serverDay = await read('deploy', 'server-day.sh')
 requireAll('server-day billing', serverDay, [
   'scripts/check-billing-env.mjs',
+  'scripts/preflight-billing.mjs',
   'scripts/test-billing-env.mjs',
   'scripts/test-billing-payment-boundary.mjs',
+  'scripts/test-billing-payment-client.mjs',
   'Billing provider must remain disabled',
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['billing:test', 'billing-payment:test', 'billing-env:test']) {
+for (const script of ['billing:test', 'billing-payment:test', 'billing-payment-client:test', 'billing-env:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 
-console.log('Billing preflight OK: payment event ledger, restricted writer, verified-event entitlement boundary and disabled provider policy verified')
+console.log('Billing preflight OK: payment event ledger, restricted writer, verified-event entitlement boundary, safe browser history and disabled provider policy verified')
