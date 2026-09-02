@@ -2,18 +2,22 @@
 
 ## Текущее состояние
 
-Платёжный провайдер **ещё не подключён**. Деньги не списываются, чек не формируется, пользователь не может купить или самостоятельно переключить тариф.
+Реальный платёжный провайдер **не подключён**. Деньги не списываются, checkout не создаётся, чек не формируется, пользователь не может купить или самостоятельно переключить тариф.
 
-При этом foundation уже существует:
+При этом billing foundation уже включает:
 
 - каталог тарифов `billing_plans`;
-- пользовательская подписка/entitlement `subscriptions`;
+- server-owned entitlement `subscriptions`;
 - 14-дневный trial;
 - месячный usage `billing_usage_monthly`;
 - PostgreSQL trigger на создание нового документа;
-- отдельный rollout switch `billing_settings.enforcement_enabled`;
-- страница `/app/billing` в кабинете;
-- browser roles имеют только SELECT к состоянию подписки и usage.
+- rollout switch `billing_settings.enforcement_enabled`;
+- metadata-only ledger `billing_payment_events`;
+- отдельную server-only capability-role `epd_billing_writer`;
+- provider-event idempotency через unique `(provider, provider_event_id)`;
+- server repository `claimVerifiedEvent -> applyVerifiedEntitlement`;
+- read-only историю безопасных payment metadata в `/app/billing`;
+- браузерные роли без права менять подписку, usage или payment events.
 
 ## Тарифы foundation
 
@@ -24,24 +28,20 @@
 | `business` | Бизнес | 2 490 ₽ | 500 |
 | `team` | Команда | 4 990 ₽ | 2 000 |
 
-Цены пока являются предварительной коммерческой моделью. До подключения оплаты они не должны интерпретироваться как уже работающая подписка.
+Цены пока являются предварительной коммерческой моделью. `team` ещё не означает реальный командный доступ — эта возможность остаётся roadmap.
 
-`team` пока не включает реальный командный доступ: это отдельно помечено как roadmap в `features`.
+## Почему лимит находится в БД
 
-## Почему лимит реализован в БД
+Лимит нельзя реализовать только React-интерфейсом: пользователь может обратиться к Data API напрямую.
 
-Нельзя ограничивать тариф только React-интерфейсом. Пользователь может обратиться к Data API напрямую.
-
-Поэтому `documents_billing_usage` срабатывает на **реальный INSERT** в `public.documents`:
+`documents_billing_usage` срабатывает на **реальный INSERT** в `public.documents`:
 
 1. определяет entitlement пользователя;
 2. увеличивает месячный usage;
 3. при включённом enforcement проверяет активность trial/подписки;
 4. атомарно не даёт превысить месячный `document_limit`.
 
-Trigger `AFTER INSERT`, поэтому обычное сохранение существующего документа через UPSERT не расходует квоту повторно.
-
-Удаление документа **не возвращает** квоту. Считается количество созданных новых черновиков, а не текущий размер таблицы.
+Обычный UPSERT существующего документа квоту повторно не расходует. Удаление документа не возвращает квоту.
 
 ## Rollout
 
@@ -49,117 +49,165 @@ Trigger `AFTER INSERT`, поэтому обычное сохранение су�
 
 ```text
 billing_settings.enforcement_enabled = false
+EPD_BILLING_PROVIDER=none
 ```
 
-Это означает:
+Поэтому usage считается, но отсутствие оплаты никого не блокирует, а backend не считает реальными никакие платежи.
 
-- usage уже можно считать;
-- trial/subscription уже можно отображать;
-- текущих пользователей не блокирует отсутствие оплаты;
-- нельзя случайно превратить незавершённый billing foundation в paywall.
+## Payment-event ledger
 
-Enforcement нельзя включать до готовности реального payment flow.
+`billing_payment_events` хранит только технические metadata уже обработанного будущим provider adapter события:
 
-## Права браузера
+- user id;
+- provider;
+- provider event id — server-side idempotency identity;
+- event type/status;
+- plan code;
+- сумма в копейках и валюта;
+- SHA-256 исходного payload;
+- безопасный error code;
+- timestamps.
 
-`authenticated` получает:
+Таблица **не хранит** raw webhook body, номер карты, CVV, платёжные секреты или provider credentials.
 
-- SELECT активных `billing_plans`;
-- SELECT своей `subscriptions`;
-- SELECT своего `billing_usage_monthly`;
-- SELECT безопасного `billing_settings`.
+Browser UI намеренно запрашивает ещё более узкий набор:
 
-Браузеру **не выдаются** INSERT/UPDATE/DELETE на:
+```text
+provider
+ event_type
+ event_status
+ plan_code
+ amount_kopecks
+ currency
+ safe_error_code
+ created_at
+ processed_at
+```
 
-- `subscriptions`;
-- `billing_usage_monthly`.
+Он не получает `provider_event_id` и `payload_sha256` и не имеет INSERT/UPDATE/DELETE к payment events.
 
-То есть пользователь не может сделать себе `plan_code='team'` или обнулить usage обычным Supabase JWT.
+## Server-owned verified event flow
 
-## Что должен делать будущий платёжный backend
-
-Целевая цепочка:
+Целевая схема после выбора провайдера:
 
 ```text
 Browser
-  -> создать платёж / checkout session
-  -> private billing backend
+  -> backend создаёт checkout по planCode
   -> payment provider
   -> provider webhook
-  -> verify webhook signature
-  -> server-owned update subscriptions
-  -> entitlement becomes active
+  -> проверить signature/authenticity
+  -> определить нашего user + plan на сервере
+  -> SHA-256 raw payload
+  -> claimVerifiedEvent()
+  -> unique provider event id блокирует повтор
+  -> applyVerifiedEntitlement()
+  -> subscription active
 ```
 
-Критично: redirect пользователя на `success_url` **не является доказательством оплаты**. Активировать подписку можно только после подтверждённого server-to-server события/проверки платежа.
+`success_url`/redirect браузера **никогда не является доказательством оплаты**.
 
-## Будущие таблицы/поля
+В текущем коде provider adapter/webhook route отсутствует, поэтому `claimVerifiedEvent` нельзя вызвать из браузера. Репозиторий — server-only boundary для будущей проверенной интеграции.
 
-В `subscriptions` уже зарезервированы:
+## Restricted billing credential
 
-- `payment_provider`;
-- `provider_customer_id`;
-- `provider_subscription_id`;
-- `status`;
-- `current_period_start`;
-- `current_period_end`;
-- `cancel_at_period_end`.
+Для будущего webhook worker предусмотрен отдельный PostgreSQL login:
 
-Это позволяет подключить провайдера без переноса основной entitlement-модели в frontend.
+```env
+EPD_BILLING_PROVIDER=none
+EPD_BILLING_DATABASE_URL=
+EPD_BILLING_DATABASE_ROLE=epd_billing_writer
+```
 
-## Статусы
+`epd_billing_writer` — NOLOGIN capability-role, создаваемая migration. Production создаст отдельный LOGIN и выдаст membership.
 
-Допустимые значения:
+Этот credential нельзя переиспользовать как:
+
+- `EPD_DATABASE_URL` — admin/migrations/backups;
+- `EPD_GATEWAY_DATABASE_URL` — operator journal writer.
+
+Deployment checker это контролирует.
+
+## Права браузера
+
+`authenticated` может читать:
+
+- активные `billing_plans`;
+- свою `subscriptions`;
+- свой `billing_usage_monthly`;
+- безопасные `billing_settings`;
+- свои `billing_payment_events` metadata.
+
+Он не может писать в:
+
+- `subscriptions`;
+- `billing_usage_monthly`;
+- `billing_payment_events`.
+
+Следовательно пользователь не может сделать себе `plan_code='team'`, обнулить usage или создать событие «оплата прошла» обычным browser JWT.
+
+## Статусы подписки
 
 - `trialing` — пробный период;
-- `active` — оплаченный/активированный доступ;
-- `past_due` — проблема с продлением/оплатой;
+- `active` — оплаченный/сервером активированный доступ;
+- `past_due` — проблема с продлением;
 - `canceled` — отменена;
-- `expired` — доступ истёк.
+- `expired` — истекла.
 
-Только `trialing` в пределах `trial_ends_at` и `active` в пределах `current_period_end` смогут создавать новые документы после включения enforcement.
+После включения enforcement только валидный `trialing` и `active` entitlement смогут создавать новые документы.
 
-## Ошибки quota enforcement
+## Статусы payment event
 
-База использует machine-safe коды:
+- `received` — зарезервирован под будущую provider processing модель;
+- `verified` — provider event успешно проверен сервером и готов к применению;
+- `applied` — entitlement применён;
+- `ignored` — событие корректно проигнорировано;
+- `failed` — безопасно зафиксирована ошибка обработки.
 
-- `billing_document_limit_reached`;
-- `billing_trial_expired`;
-- `billing_period_expired`;
-- `billing_subscription_inactive`;
-- `billing_subscription_missing`;
-- `billing_user_mismatch`.
-
-Frontend преобразует их в понятные сообщения через `src/billing.ts`.
+Повтор одного `(provider, provider_event_id)` не должен повторно активировать entitlement.
 
 ## Что ещё нужно до реальных денег
 
-1. выбрать российский/подходящий платёжный провайдер;
-2. определить схему ИП/ООО, налогообложение и применение 54-ФЗ;
-3. реализовать checkout только через backend;
-4. верифицировать webhook/signature;
-5. сделать idempotency платежных событий;
-6. server-owned обновление `subscriptions`;
-7. возвраты/отмена/продление;
-8. чеки, если применимо;
-9. история платежей/счета;
-10. уведомления о продлении/ошибке оплаты;
-11. только после полного smoke-test включить `enforcement_enabled=true`.
+1. выбрать подходящего платёжного провайдера;
+2. определить ИП/ООО, налогообложение и применение 54-ФЗ;
+3. реализовать backend checkout, принимающий только `planCode`, а цену берущий из server catalogue;
+4. реализовать и проверить provider webhook/signature;
+5. связать provider customer/payment с нашим user server-side;
+6. подключить существующий payment-event ledger;
+7. обработать продление, отмену, возврат и `past_due`;
+8. реализовать чеки, если применимо;
+9. провести end-to-end sandbox/payment smoke test;
+10. только после этого изменить `EPD_BILLING_PROVIDER` и включать `enforcement_enabled=true` отдельным rollout.
 
-## Миграция
+## Миграции
 
-Foundation создаётся:
+Billing foundation:
 
 ```text
 supabase/migrations/202609020001_billing_foundation.sql
 ```
 
-Она должна применяться через общий guarded migration runner после предыдущих миграций.
+Operator writer:
 
-## Проверка
+```text
+supabase/migrations/202609020002_gateway_writer_role.sql
+```
+
+Payment-event ledger / billing capability role:
+
+```text
+supabase/migrations/202609020003_billing_payment_events.sql
+```
+
+Все migration-файлы применяются общим guarded runner, а не вручную по одному.
+
+## Проверки
 
 ```bash
 npm run billing:test
+npm run billing-payment:test
+npm run billing-payment-client:test
+npm run billing-env:test
+npm run preflight
 ```
 
-Проверка фиксирует тарифы, trial, read-only browser boundary и то, что enforcement по умолчанию не включён.
+Они фиксируют тарифы/trial, browser read-only boundary, provider-event idempotency, запрет raw payment data, раздельные DB credentials и то, что реальный provider пока выключен.
