@@ -12,6 +12,11 @@ import {
   supabaseDocumentRepositoryStatus,
 } from './repositories/supabase-documents.mjs'
 import {
+  createOperatorAttemptRepository,
+  operatorAttemptRepositoryConfigFromEnv,
+  operatorAttemptRepositoryStatus,
+} from './repositories/operator-attempts.mjs'
+import {
   KONTUR_SANDBOX_GENERATION_POLICY,
   generateKonturSandboxTitleForDocument,
   validateSandboxGenerateRequest,
@@ -27,6 +32,9 @@ const authConfig = assertGatewayAuthConfig(gatewayAuthConfigFromEnv(), operatorM
 const rateConfig = rateLimitConfigFromEnv()
 const repositoryConfig = supabaseDocumentRepositoryConfigFromEnv()
 const repositoryStatus = supabaseDocumentRepositoryStatus(repositoryConfig)
+const attemptRepositoryConfig = operatorAttemptRepositoryConfigFromEnv()
+const attemptRepositoryStatus = operatorAttemptRepositoryStatus(attemptRepositoryConfig)
+const attemptRepository = createOperatorAttemptRepository(attemptRepositoryConfig)
 const konturConfig = konturConfigFromEnv()
 const konturStatus = konturConfigStatus(konturConfig)
 const allowedOrigins = new Set(
@@ -133,9 +141,13 @@ function sandboxError(error) {
     ['document_repository_token_required', 503],
     ['kontur_config_incomplete', 503],
     ['sandbox_auth_required', 403],
+    ['sandbox_already_generated', 409],
+    ['sandbox_generation_in_progress', 409],
+    ['operator_attempt_identity_conflict', 409],
+    ['operator_attempt_journal_update_failed', 503],
   ])
   return {
-    status: known.get(code) || 502,
+    status: known.get(code) || Number(error?.statusCode || 502),
     code: known.has(code) ? code : 'sandbox_generation_failed',
   }
 }
@@ -209,6 +221,7 @@ const server = createServer(async (req, res) => {
         ready: sandboxGenerateReady(),
         repositoryConfigured: repositoryStatus.configured,
         operatorCredentialsConfigured: konturStatus.configured,
+        persistentAttemptJournal: attemptRepositoryStatus,
       },
       supportedCandidate: 'epd-light/operator-candidate-v1',
       localKonturUserDataPreview: KONTUR_USERDATA_PREVIEW_CONTRACT,
@@ -337,6 +350,7 @@ const server = createServer(async (req, res) => {
         documentId: requestValidation.documentId,
         repositoryConfig,
         konturConfig,
+        attemptRepository,
       })
       respond(200, {
         ok: true,
@@ -346,6 +360,7 @@ const server = createServer(async (req, res) => {
         generatedXml: result.generatedXml,
         externalCallMade: Boolean(result.externalCallMade),
         externalResultShared: Boolean(result.externalResultShared),
+        persistence: result.persistence,
         idempotency: result.idempotency,
         signed: false,
         sent: false,
@@ -358,7 +373,11 @@ const server = createServer(async (req, res) => {
       const mapped = sandboxError(error)
       respond(mapped.status, {
         error: mapped.code,
-        message: 'Sandbox GenerateTitleXml failed before any signing or PostMessage step',
+        message: mapped.code === 'sandbox_already_generated'
+          ? 'Для этой revision уже есть успешная persistent sandbox-попытка; повторный внешний GenerateTitleXml заблокирован.'
+          : mapped.code === 'sandbox_generation_in_progress'
+            ? 'Для этой revision уже выполняется persistent sandbox-попытка.'
+            : 'Sandbox GenerateTitleXml failed before any signing or PostMessage step',
         requestId,
       }, mapped.code, externalHeaders)
     }
