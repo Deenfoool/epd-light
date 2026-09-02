@@ -4,6 +4,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const migration = await readFile('supabase/migrations/202609020001_billing_foundation.sql', 'utf8')
 const pricing = await readFile('src/app-chunks/App.06.part', 'utf8')
 const billing = await readFile('src/billing.ts', 'utf8')
+const app = await Promise.all(['01','09','12','29','34'].map((part) => readFile(`src/app-chunks/App.${part}.part`, 'utf8'))).then((parts) => parts.join('\n'))
 
 for (const snippet of [
   "('start', 'Старт', 990, 50",
@@ -36,8 +37,15 @@ assert(migration.includes('deleting a document does not refund quota'), 'quota s
 for (const snippet of ['990 ₽', '2 490 ₽', '4 990 ₽', 'до 50 новых черновиков', 'до 500 новых черновиков', 'до 2000 новых черновиков']) {
   assert(pricing.includes(snippet), `pricing UI drifted from billing catalogue: ${snippet}`)
 }
-for (const snippet of ["code: 'start'", 'monthly_price_rub: 990', "code: 'business'", 'monthly_price_rub: 2490', "code: 'team'", 'monthly_price_rub: 4990']) {
-  assert(billing.includes(snippet), `billing client fallback drifted: ${snippet}`)
-}
+for (const snippet of [
+  "code: 'start'", 'monthly_price_rub: 990', "code: 'business'", 'monthly_price_rub: 2490', "code: 'team'", 'monthly_price_rub: 4990',
+  'currentBillingPeriodStart', ".eq('period_start', periodStart).maybeSingle()",
+]) assert(billing.includes(snippet), `billing client invariant missing: ${snippet}`)
+assert(!billing.includes(".order('period_start', { ascending: false }).limit(1)"), 'billing UI must not show previous-month usage as current usage')
 
-console.log('Billing foundation test OK: catalogue, trial, DB usage enforcement and browser read-only boundaries verified')
+for (const snippet of [
+  "'/app/billing'", 'function BillingPage()', 'Тариф и лимиты', 'billingErrorMessage',
+  'Лимиты пока не блокируют', 'Деньги сейчас не списываются',
+]) assert(app.includes(snippet), `billing app UI invariant missing: ${snippet}`)
+
+console.log('Billing foundation test OK: catalogue, trial, current-month usage, DB enforcement and browser read-only boundaries verified')
