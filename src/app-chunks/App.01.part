@@ -9,7 +9,7 @@ import type { BillingState, Company, DocumentRow, Driver, EtrnData, Party, Profi
 import { cargoTotals, emptyCargo, emptyRussianAddress, exportJson, isReady, newDoc, normalizeEtrn, operatorReadiness, statusLabel, validateEtrn, validGuid, validInn } from './etrn'
 import { buildOperatorDraft } from './operator-draft'
 import { gatewayFetch } from './gateway'
-import { billingRemainingDocuments, billingStatusLabel, getBillingState } from './billing'
+import { billingErrorMessage, billingRemainingDocuments, billingStatusLabel, getBillingState } from './billing'
 import {
   cloudEnabled, deleteCompany, deleteDocument, deleteDriver, deleteVehicle, getProfile, getSessionEmail,
   listCompanies, listDocuments, listDrivers, listVehicles, saveCompany, saveDocument, saveDriver,
