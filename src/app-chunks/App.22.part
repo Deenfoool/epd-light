@@ -1,1 +1,121 @@
-function DocumentView({doc,reload}:{doc:DocumentRow,reload:()=>void}){const [serverCheck,setServerCheck]=useState<any>(null);const [konturCheck,setKonturCheck]=useState<any>(null);const [sandboxCheck,setSandboxCheck]=useState<any>(null);const [gatewayCaps,setGatewayCaps]=useState<any>(null);const [checking,setChecking]=useState(false);const [checkingKontur,setCheckingKontur]=useState(false);const [checkingSandbox,setCheckingSandbox]=useState(false);useEffect(()=>{let alive=true;fetch('/api/operator/capabilities',{headers:{accept:'application/json'}}).then(async r=>{const ct=r.headers.get('content-type')||'';if(!r.ok||!ct.includes('application/json'))return null;return r.json()}).then(x=>{if(alive)setGatewayCaps(x)}).catch(()=>{});return()=>{alive=false}},[]);const download=(payload:any,suffix:string)=>{const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${doc.doc_number}${suffix}.json`;a.click();URL.revokeObjectURL(a.href)};const downloadText=(text:string,suffix:string,type='text/plain')=>{const blob=new Blob([text],{type});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${doc.doc_number}${suffix}`;a.click();URL.revokeObjectURL(a.href)};const dl=()=>download(exportJson(doc),'');const dlIntegration=()=>download(buildOperatorDraft(doc),'-integration-candidate');const serverPreflight=async()=>{setChecking(true);setServerCheck(null);try{const r=await gatewayFetch('/api/operator/preflight',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(buildOperatorDraft(doc))});const ct=r.headers.get('content-type')||'';if(!ct.includes('application/json'))throw new Error('Backend gateway не подключён');const body=await r.json();setServerCheck({...body,httpStatus:r.status})}catch(e){setServerCheck({ok:false,gatewayUnavailable:true,errors:[e instanceof Error?e.message:'Backend gateway недоступен']})}finally{setChecking(false)}};const konturPreview=async()=>{setCheckingKontur(true);setKonturCheck(null);try{const r=await gatewayFetch('/api/operator/kontur/userdata-preview',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(buildOperatorDraft(doc))});const ct=r.headers.get('content-type')||'';if(!ct.includes('application/json'))throw new Error('Backend gateway не подключён');const body=await r.json();const result={...body,httpStatus:r.status};setKonturCheck(result);if(r.ok&&body.xml)downloadText(body.xml,'-kontur-userdata-preview.xml','application/xml;charset=utf-8')}catch(e){setKonturCheck({ok:false,gatewayUnavailable:true,errors:[e instanceof Error?e.message:'Backend gateway недоступен']})}finally{setCheckingKontur(false)}};const sandboxReady=Boolean(gatewayCaps?.sandboxGenerateTitle?.ready);const persistentJournal=Boolean(gatewayCaps?.sandboxGenerateTitle?.persistentAttemptJournal?.configured);const konturSandbox=async()=>{if(!sandboxReady)return;if(!window.confirm('Будет выполнен реальный sandbox-запрос GenerateTitleXml к Контур/Диадок. Документ НЕ будет подписан и НЕ будет отправлен через PostMessage. Продолжить?'))return;setCheckingSandbox(true);setSandboxCheck(null);try{const r=await gatewayFetch('/api/operator/kontur/generate-title-sandbox',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({documentId:doc.id})});const ct=r.headers.get('content-type')||'';if(!ct.includes('application/json'))throw new Error('Backend gateway не подключён');const body=await r.json();const result={...body,httpStatus:r.status};setSandboxCheck(result);if(r.ok&&body.generatedXml)downloadText(body.generatedXml,'-kontur-generated-title-sandbox.xml','application/xml;charset=utf-8')}catch(e){setSandboxCheck({ok:false,gatewayUnavailable:true,message:e instanceof Error?e.message:'Sandbox gateway недоступен'})}finally{setCheckingSandbox(false)}};const print=()=>window.print();const required=validateEtrn(doc.data).filter(x=>x.kind==='required');const checked=required.length===0;const op=operatorReadiness(doc.data);return <><div className="page-title no-print"><div><Button variant="ghost" onClick={()=>go('/app/documents')}><ArrowLeft size={16}/>К документам</Button><h1>{doc.doc_number}</h1><p><StatusBadge s={doc.status}/> · обновлён {fmt(doc.updated_at)}</p></div><div className="actions"><Button variant="outline" onClick={dl}><Download size={16}/>Черновик JSON</Button><Button variant="outline" onClick={dlIntegration}><FileJson size={16}/>Integration JSON</Button><Button variant="outline" disabled={checking} onClick={serverPreflight}><ClipboardCheck size={16}/>{checking?'Проверяем…':'Server preflight'}</Button><Button variant="outline" disabled={checkingKontur} onClick={konturPreview}><FileText size={16}/>{checkingKontur?'Собираем XML…':'Kontur XML preview'}</Button>{sandboxReady&&<Button variant="outline" disabled={checkingSandbox} onClick={konturSandbox}><Send size={16}/>{checkingSandbox?'GenerateTitleXml…':'Kontur sandbox'}</Button>}<Button variant="outline" onClick={print}><Printer size={16}/>Печать</Button><Button onClick={()=>go(`/app/documents/${doc.id}/edit`)}>Редактировать</Button></div></div><Card className="status-flow no-print"><div className="done"><Check/>Черновик создан</div><div className={checked?'done':'pending'}><ClipboardCheck/>{checked?'Базовая проверка пройдена':`Требует исправлений: ${required.length}`}</div><div className={op.candidate?'done':'pending'}><FileJson/>{op.candidate?'Поля-кандидаты Т1 заполнены':`До T1-кандидата: ${op.missing}`}</div><div className={doc.status==='ready'?'done':'pending'}><Check/>Внутренне готов</div><div className="locked">Передан оператору <small>недоступно до интеграции</small></div><div className="locked">Подписан / принят <small>недоступно</small></div></Card>{serverCheck&&<div className={serverCheck.ok?'success-box no-print':'error-box no-print'}>{serverCheck.ok?<Check size={18}/>:<ShieldAlert size={18}/>}<span>{serverCheck.gatewayUnavailable?'Gateway не обнаружен. Для server preflight запустите Docker Compose или production backend.':serverCheck.ok?`Server preflight пройден. Предупреждений: ${serverCheck.warnings?.length??0}. Это не XSD-валидация и не отправка оператору.`:`Server preflight не пройден: ${(serverCheck.errors||[serverCheck.message||serverCheck.error]).filter(Boolean).join('; ')}`}</span></div>}{konturCheck&&<div className={konturCheck.ok?'success-box no-print':'error-box no-print'}>{konturCheck.ok?<Check size={18}/>:<ShieldAlert size={18}/>}<span>{konturCheck.gatewayUnavailable?'Gateway не обнаружен. Kontur XML preview доступен только при запущенном backend gateway.':konturCheck.ok?`Kontur UserDataXml preview сформирован и скачан. Внешний API не вызывался; это ещё не результат GenerateTitleXml и не XSD-проверка ФНС. Предупреждений: ${konturCheck.warnings?.length??0}.`:`Kontur XML preview не сформирован: ${(konturCheck.errors||[konturCheck.message||konturCheck.error]).filter(Boolean).join('; ')}`}</span></div>}{sandboxCheck&&<div className={sandboxCheck.ok?'success-box no-print':'error-box no-print'}>{sandboxCheck.ok?<Check size={18}/>:<ShieldAlert size={18}/>}<span>{sandboxCheck.gatewayUnavailable?'Sandbox gateway недоступен.':sandboxCheck.ok?`${sandboxCheck.externalResultShared?'Параллельный дубль схлопнут: использован тот же sandbox-результат без второго внешнего вызова.':'Kontur GenerateTitleXml выполнен в sandbox, результат скачан.'} Revision: ${sandboxCheck.idempotency?.sourceRevision||'—'}; fingerprint: ${String(sandboxCheck.idempotency?.requestFingerprint||'—').slice(0,16)}…. ${sandboxCheck.persistence?.persisted?'Попытка записана в persistent journal.':persistentJournal?'Persistent journal включён, но подтверждение записи не получено.':'Результат защищён только in-memory dedupe текущего gateway-процесса.'} XML не подписан и PostMessage не вызывался.`:`Sandbox GenerateTitleXml не выполнен: ${sandboxCheck.message||sandboxCheck.error||'неизвестная ошибка'}`}</span></div>}<div className="warning no-print"><ShieldAlert size={18}/><span><b>Integration JSON</b> и <b>Kontur XML preview</b> — локальные технические представления. Кнопка <b>Kontur sandbox</b> появляется только когда backend явно включён в sandbox-режим и готов к реальному GenerateTitleXml; она передаёт backend только ID документа, а сам документ перечитывается через RLS. Для одинаковой revision backend вычисляет SHA-256 idempotency identity и схлопывает одновременные дубли. {persistentJournal?'Persistent journal включён: успешная попытка сохраняется как безопасные metadata и блокирует повторный внешний GenerateTitleXml той же revision после рестарта gateway.':'Persistent journal не настроен: после рестарта gateway завершённая попытка не будет известна процессу.'} Даже sandbox-результат не подписан, не отправлен через PostMessage и не является фактом регистрации ЭТрН в ГИС ЭПД.</span></div><PrintPreview doc={doc}/></>}
+function DocumentView({doc,reload}:{doc:DocumentRow,reload:()=>void}){
+  const [serverCheck,setServerCheck]=useState<any>(null)
+  const [konturCheck,setKonturCheck]=useState<any>(null)
+  const [sandboxCheck,setSandboxCheck]=useState<any>(null)
+  const [gatewayCaps,setGatewayCaps]=useState<any>(null)
+  const [attempts,setAttempts]=useState<OperatorAttempt[]>([])
+  const [attemptsLoading,setAttemptsLoading]=useState(false)
+  const [attemptsError,setAttemptsError]=useState('')
+  const [checking,setChecking]=useState(false)
+  const [checkingKontur,setCheckingKontur]=useState(false)
+  const [checkingSandbox,setCheckingSandbox]=useState(false)
+
+  const refreshAttempts=async()=>{
+    setAttemptsLoading(true)
+    setAttemptsError('')
+    try{setAttempts(await listOperatorAttempts(doc.id))}
+    catch(e){setAttemptsError(e instanceof Error?e.message:'Не удалось загрузить журнал')}
+    finally{setAttemptsLoading(false)}
+  }
+
+  useEffect(()=>{
+    let alive=true
+    fetch('/api/operator/capabilities',{headers:{accept:'application/json'}})
+      .then(async r=>{const ct=r.headers.get('content-type')||'';if(!r.ok||!ct.includes('application/json'))return null;return r.json()})
+      .then(x=>{if(alive)setGatewayCaps(x)})
+      .catch(()=>{})
+    void listOperatorAttempts(doc.id)
+      .then(x=>{if(alive)setAttempts(x)})
+      .catch(e=>{if(alive)setAttemptsError(e instanceof Error?e.message:'Не удалось загрузить журнал')})
+    return()=>{alive=false}
+  },[doc.id])
+
+  const download=(payload:any,suffix:string)=>{const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${doc.doc_number}${suffix}.json`;a.click();URL.revokeObjectURL(a.href)}
+  const downloadText=(text:string,suffix:string,type='text/plain')=>{const blob=new Blob([text],{type});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${doc.doc_number}${suffix}`;a.click();URL.revokeObjectURL(a.href)}
+  const dl=()=>download(exportJson(doc),'')
+  const dlIntegration=()=>download(buildOperatorDraft(doc),'-integration-candidate')
+
+  const serverPreflight=async()=>{
+    setChecking(true);setServerCheck(null)
+    try{
+      const r=await gatewayFetch('/api/operator/preflight',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(buildOperatorDraft(doc))})
+      const ct=r.headers.get('content-type')||''
+      if(!ct.includes('application/json'))throw new Error('Backend gateway не подключён')
+      const body=await r.json();setServerCheck({...body,httpStatus:r.status})
+    }catch(e){setServerCheck({ok:false,gatewayUnavailable:true,errors:[e instanceof Error?e.message:'Backend gateway недоступен']})}
+    finally{setChecking(false)}
+  }
+
+  const konturPreview=async()=>{
+    setCheckingKontur(true);setKonturCheck(null)
+    try{
+      const r=await gatewayFetch('/api/operator/kontur/userdata-preview',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(buildOperatorDraft(doc))})
+      const ct=r.headers.get('content-type')||''
+      if(!ct.includes('application/json'))throw new Error('Backend gateway не подключён')
+      const body=await r.json();const result={...body,httpStatus:r.status};setKonturCheck(result)
+      if(r.ok&&body.xml)downloadText(body.xml,'-kontur-userdata-preview.xml','application/xml;charset=utf-8')
+    }catch(e){setKonturCheck({ok:false,gatewayUnavailable:true,errors:[e instanceof Error?e.message:'Backend gateway недоступен']})}
+    finally{setCheckingKontur(false)}
+  }
+
+  const sandboxReady=Boolean(gatewayCaps?.sandboxGenerateTitle?.ready)
+  const persistentJournal=Boolean(gatewayCaps?.sandboxGenerateTitle?.persistentAttemptJournal?.configured)
+  const konturSandbox=async()=>{
+    if(!sandboxReady)return
+    if(!window.confirm('Будет выполнен реальный sandbox-запрос GenerateTitleXml к Контур/Диадок. Документ НЕ будет подписан и НЕ будет отправлен через PostMessage. Продолжить?'))return
+    setCheckingSandbox(true);setSandboxCheck(null)
+    try{
+      const r=await gatewayFetch('/api/operator/kontur/generate-title-sandbox',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({documentId:doc.id})})
+      const ct=r.headers.get('content-type')||''
+      if(!ct.includes('application/json'))throw new Error('Backend gateway не подключён')
+      const body=await r.json();const result={...body,httpStatus:r.status};setSandboxCheck(result)
+      if(r.ok&&body.generatedXml)downloadText(body.generatedXml,'-kontur-generated-title-sandbox.xml','application/xml;charset=utf-8')
+      if(r.ok||['sandbox_already_generated','sandbox_generation_in_progress'].includes(body?.error))void refreshAttempts()
+    }catch(e){setSandboxCheck({ok:false,gatewayUnavailable:true,message:e instanceof Error?e.message:'Sandbox gateway недоступен'})}
+    finally{setCheckingSandbox(false)}
+  }
+
+  const print=()=>window.print()
+  const required=validateEtrn(doc.data).filter(x=>x.kind==='required')
+  const checked=required.length===0
+  const op=operatorReadiness(doc.data)
+
+  return <>
+    <div className="page-title no-print">
+      <div><Button variant="ghost" onClick={()=>go('/app/documents')}><ArrowLeft size={16}/>К документам</Button><h1>{doc.doc_number}</h1><p><StatusBadge s={doc.status}/> · обновлён {fmt(doc.updated_at)}</p></div>
+      <div className="actions">
+        <Button variant="outline" onClick={dl}><Download size={16}/>Черновик JSON</Button>
+        <Button variant="outline" onClick={dlIntegration}><FileJson size={16}/>Integration JSON</Button>
+        <Button variant="outline" disabled={checking} onClick={serverPreflight}><ClipboardCheck size={16}/>{checking?'Проверяем…':'Server preflight'}</Button>
+        <Button variant="outline" disabled={checkingKontur} onClick={konturPreview}><FileText size={16}/>{checkingKontur?'Собираем XML…':'Kontur XML preview'}</Button>
+        {sandboxReady&&<Button variant="outline" disabled={checkingSandbox} onClick={konturSandbox}><Send size={16}/>{checkingSandbox?'GenerateTitleXml…':'Kontur sandbox'}</Button>}
+        <Button variant="outline" onClick={print}><Printer size={16}/>Печать</Button>
+        <Button onClick={()=>go(`/app/documents/${doc.id}/edit`)}>Редактировать</Button>
+      </div>
+    </div>
+
+    <Card className="status-flow no-print">
+      <div className="done"><Check/>Черновик создан</div>
+      <div className={checked?'done':'pending'}><ClipboardCheck/>{checked?'Базовая проверка пройдена':`Требует исправлений: ${required.length}`}</div>
+      <div className={op.candidate?'done':'pending'}><FileJson/>{op.candidate?'Поля-кандидаты Т1 заполнены':`До T1-кандидата: ${op.missing}`}</div>
+      <div className={doc.status==='ready'?'done':'pending'}><Check/>Внутренне готов</div>
+      <div className="locked">Передан оператору <small>недоступно до интеграции</small></div>
+      <div className="locked">Подписан / принят <small>недоступно</small></div>
+    </Card>
+
+    {serverCheck&&<div className={serverCheck.ok?'success-box no-print':'error-box no-print'}>{serverCheck.ok?<Check size={18}/>:<ShieldAlert size={18}/>}<span>{serverCheck.gatewayUnavailable?'Gateway не обнаружен. Для server preflight запустите Docker Compose или production backend.':serverCheck.ok?`Server preflight пройден. Предупреждений: ${serverCheck.warnings?.length??0}. Это не XSD-валидация и не отправка оператору.`:`Server preflight не пройден: ${(serverCheck.errors||[serverCheck.message||serverCheck.error]).filter(Boolean).join('; ')}`}</span></div>}
+    {konturCheck&&<div className={konturCheck.ok?'success-box no-print':'error-box no-print'}>{konturCheck.ok?<Check size={18}/>:<ShieldAlert size={18}/>}<span>{konturCheck.gatewayUnavailable?'Gateway не обнаружен. Kontur XML preview доступен только при запущенном backend gateway.':konturCheck.ok?`Kontur UserDataXml preview сформирован и скачан. Внешний API не вызывался; это ещё не результат GenerateTitleXml и не XSD-проверка ФНС. Предупреждений: ${konturCheck.warnings?.length??0}.`:`Kontur XML preview не сформирован: ${(konturCheck.errors||[konturCheck.message||konturCheck.error]).filter(Boolean).join('; ')}`}</span></div>}
+    {sandboxCheck&&<div className={sandboxCheck.ok?'success-box no-print':'error-box no-print'}>{sandboxCheck.ok?<Check size={18}/>:<ShieldAlert size={18}/>}<span>{sandboxCheck.gatewayUnavailable?'Sandbox gateway недоступен.':sandboxCheck.ok?`${sandboxCheck.externalResultShared?'Параллельный дубль схлопнут: использован тот же sandbox-результат без второго внешнего вызова.':'Kontur GenerateTitleXml выполнен в sandbox, результат скачан.'} Revision: ${sandboxCheck.idempotency?.sourceRevision||'—'}; fingerprint: ${String(sandboxCheck.idempotency?.requestFingerprint||'—').slice(0,16)}…. ${sandboxCheck.persistence?.persisted?'Попытка записана в persistent journal.':persistentJournal?'Persistent journal включён, но подтверждение записи не получено.':'Результат защищён только in-memory dedupe текущего gateway-процесса.'} XML не подписан и PostMessage не вызывался.`:`Sandbox GenerateTitleXml не выполнен: ${sandboxCheck.message||sandboxCheck.error||'неизвестная ошибка'}`}</span></div>}
+
+    <Card className="top-gap no-print">
+      <div className="page-title" style={{marginBottom:12}}>
+        <div><h3>История действий оператора</h3><p>Только безопасные metadata из <code>operator_attempts</code>. XML, токены и данные ЭТрН здесь не хранятся.</p></div>
+        <Button variant="outline" disabled={attemptsLoading} onClick={()=>void refreshAttempts()}><RefreshCw size={16}/>{attemptsLoading?'Обновляем…':'Обновить'}</Button>
+      </div>
+      {attemptsError?<div className="error-box"><ShieldAlert size={18}/><span>Журнал недоступен: {attemptsError}</span></div>:attempts.length===0?<p className="muted">Для этого документа ещё нет записей operator journal. В demo/local режиме это нормально.</p>:<div className="table-wrap"><table><thead><tr><th>Время</th><th>Операция</th><th>Режим</th><th>Статус</th><th>Revision</th><th>Fingerprint</th><th>Код</th></tr></thead><tbody>{attempts.map(a=><tr key={a.id}><td>{new Date(a.created_at).toLocaleString('ru-RU')}</td><td>{a.provider} · {a.operation}</td><td>{a.mode}</td><td><b>{operatorAttemptStatusLabel(a.status)}</b></td><td><code>{String(a.document_revision||'').slice(0,19)}</code></td><td><code>{String(a.request_fingerprint||'').slice(0,12)}…</code></td><td>{a.safe_error_code||'—'}</td></tr>)}</tbody></table></div>}
+    </Card>
+
+    <div className="warning no-print"><ShieldAlert size={18}/><span><b>Integration JSON</b> и <b>Kontur XML preview</b> — локальные технические представления. Кнопка <b>Kontur sandbox</b> появляется только когда backend явно включён в sandbox-режим и готов к реальному GenerateTitleXml; она передаёт backend только ID документа, а сам документ перечитывается через RLS. Для одинаковой revision backend вычисляет SHA-256 idempotency identity и схлопывает одновременные дубли. {persistentJournal?'Persistent journal включён: успешная попытка сохраняется как безопасные metadata и блокирует повторный внешний GenerateTitleXml той же revision после рестарта gateway.':'Persistent journal не настроен: после рестарта gateway завершённая попытка не будет известна процессу.'} Даже sandbox-результат не подписан, не отправлен через PostMessage и не является фактом регистрации ЭТрН в ГИС ЭПД.</span></div>
+    <PrintPreview doc={doc}/>
+  </>
+}
