@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "preflight": "node scripts/preflight-deploy.mjs && node scripts/preflight-billing.mjs && node scripts/preflight-runtime.mjs && node scripts/preflight.mjs",
+    "preflight": "node scripts/preflight-deploy.mjs && node scripts/preflight-migrations.mjs && node scripts/preflight-billing.mjs && node scripts/preflight-runtime.mjs && node scripts/preflight.mjs",
     "deploy:check": "node scripts/check-deployment-env.mjs && node scripts/check-billing-env.mjs",
     "deploy:env:test": "node scripts/test-deployment-env.mjs && node scripts/test-billing-env.mjs",
     "deploy:dependencies:check": "node scripts/check-runtime-dependencies.mjs",
