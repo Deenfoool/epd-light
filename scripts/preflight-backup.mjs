@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -8,6 +9,15 @@ const fail = (message) => { console.error(`BACKUP PRECHECK FAILED: ${message}`);
 const requireAll = (name, text, snippets) => {
   for (const snippet of snippets) if (!text.includes(snippet)) fail(`${name}: missing ${snippet}`)
 }
+const shellSyntax = (...parts) => {
+  try { execFileSync('sh', ['-n', path.join(root, ...parts)], { stdio: 'pipe' }) }
+  catch { fail(`shell syntax invalid: ${parts.join('/')}`) }
+}
+
+shellSyntax('deploy', 'check-backup-readiness.sh')
+shellSyntax('deploy', 'backup-postgres.sh')
+shellSyntax('deploy', 'verify-postgres-backup.sh')
+shellSyntax('deploy', 'test-restore-postgres.sh')
 
 const readiness = await read('deploy', 'check-backup-readiness.sh')
 requireAll('backup readiness checker', readiness, [
@@ -73,4 +83,4 @@ if (!String(pkg.scripts?.preflight || '').includes('preflight-backup.mjs')) {
   fail('npm run preflight must include preflight-backup.mjs')
 }
 
-console.log('Backup preflight OK: freshness threshold, encrypted archive checksum/decryption/pg_restore verification and secret-safe env parsing verified')
+console.log('Backup preflight OK: shell syntax, freshness threshold, encrypted archive checksum/decryption/pg_restore verification and secret-safe env parsing verified')
