@@ -18,6 +18,7 @@ requireAll('.dockerignore', dockerignore, ['.git', '.env', '.env.*', 'node_modul
 const compose = await read('docker-compose.yml')
 requireAll('docker-compose.yml', compose, [
   '"127.0.0.1:8080:8080"',
+  'EPD_DEPLOYMENT_MODE',
   'EPD_EXTERNAL_RATE_LIMIT_MAX',
   'EPD_DATA_SUPABASE_PUBLIC_KEY',
   'EPD_GATEWAY_DATABASE_URL',
@@ -42,8 +43,10 @@ const serverDay = await read('deploy', 'server-day.sh')
 requireAll('server-day.sh', serverDay, [
   'scripts/check-deployment-env.mjs',
   'scripts/preflight.mjs',
+  'scripts/test-operator-attempt-repository.mjs',
   'scripts/test-idempotency.mjs',
   'scripts/test-billing-foundation.mjs',
+  'persistentAttemptJournal',
   'docker compose --env-file',
   'externalSendEnabled',
   '127.0.0.1:8080',
@@ -107,6 +110,8 @@ if (/create\s+role\s+epd_gateway_writer\s+login/i.test(writerMigration)) fail('g
 
 const envExample = await read('.env.example')
 requireAll('.env.example', envExample, [
+  'EPD_DEPLOYMENT_MODE=local',
+  'EPD_DEPLOYMENT_MODE=production',
   'EPD_GATEWAY_AUTH_MODE=disabled',
   'EPD_DATA_SUPABASE_PUBLIC_KEY=',
   'EPD_GATEWAY_DATABASE_URL=',
@@ -122,7 +127,7 @@ requireAll('.env.example', envExample, [
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'billing:test']) {
+for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'billing:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 if (pkg.dependencies?.pg !== '8.23.0') fail('root pg dependency must stay pinned to 8.23.0')
@@ -134,4 +139,4 @@ for (const [section, dependencies] of Object.entries({ dependencies: pkg.depende
   }
 }
 
-console.log('Deploy preflight OK: secrets/backups ignored, guarded checksum migrations, billing rollout, restricted persistent journal, loopback binding, private gateway, HTTPS template and encrypted recovery safeguards verified')
+console.log('Deploy preflight OK: explicit production mode, secrets/backups ignored, guarded checksum migrations, billing rollout, restricted persistent journal, loopback binding, private gateway, HTTPS template and encrypted recovery safeguards verified')
