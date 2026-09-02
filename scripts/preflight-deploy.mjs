@@ -44,6 +44,7 @@ requireAll('server-day.sh', serverDay, [
   'scripts/check-deployment-env.mjs',
   'scripts/preflight.mjs',
   'scripts/test-operator-attempt-repository.mjs',
+  'scripts/test-operator-attempt-client.mjs',
   'scripts/test-idempotency.mjs',
   'scripts/test-billing-foundation.mjs',
   'persistentAttemptJournal',
@@ -127,7 +128,7 @@ requireAll('.env.example', envExample, [
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'billing:test']) {
+for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 if (pkg.dependencies?.pg !== '8.23.0') fail('root pg dependency must stay pinned to 8.23.0')
@@ -139,4 +140,4 @@ for (const [section, dependencies] of Object.entries({ dependencies: pkg.depende
   }
 }
 
-console.log('Deploy preflight OK: explicit production mode, secrets/backups ignored, guarded checksum migrations, billing rollout, restricted persistent journal, loopback binding, private gateway, HTTPS template and encrypted recovery safeguards verified')
+console.log('Deploy preflight OK: explicit production mode, safe operator journal UI boundary, secrets/backups ignored, guarded checksum migrations, billing rollout, restricted persistent journal, loopback binding, private gateway, HTTPS template and encrypted recovery safeguards verified')
