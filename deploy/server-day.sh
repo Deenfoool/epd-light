@@ -57,6 +57,7 @@ run_node scripts/preflight.mjs
 run_node scripts/test-deployment-env.mjs
 run_node scripts/test-billing-env.mjs
 run_node scripts/test-build-info.mjs
+run_node scripts/test-dependency-check.mjs
 run_node scripts/test-readiness.mjs
 run_node scripts/test-web-security.mjs
 run_node scripts/test-audit.mjs
@@ -73,6 +74,9 @@ run_node scripts/test-gateway.mjs
 run_node scripts/test-kontur-userdata.mjs
 run_node scripts/test-kontur-generation.mjs
 run_node scripts/test-kontur-sandbox.mjs
+
+echo "== Production dependency smoke check =="
+run_node scripts/check-runtime-dependencies.mjs
 
 echo "== Docker Compose config =="
 dc config >/dev/null
@@ -167,6 +171,7 @@ printf '%s' "$HEADERS" | grep -qi 'X-Content-Type-Options: nosniff' || { echo "E
 
 echo "== Deployment started safely =="
 echo "Runtime commit verified: $BUILD_COMMIT"
+echo "Supabase Auth JWKS and Data API billing foundation were reachable before launch."
 echo "Project HTTP is bound to 127.0.0.1:8080. Put an HTTPS reverse proxy in front of it before public access."
 echo "Technical production baseline is ready; this check does not claim legal or operator-production readiness."
 echo "Billing provider, checkout, webhook and real money are confirmed disabled."
