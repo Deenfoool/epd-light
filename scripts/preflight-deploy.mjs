@@ -32,22 +32,35 @@ for (const forbidden of ['"8080:8080"', '"0.0.0.0:8080:8080"', '"8787:8787"']) {
   if (compose.includes(forbidden)) fail(`unsafe published port found: ${forbidden}`)
 }
 
+const nginx = await read('deploy', 'nginx-compose.conf')
+requireAll('nginx security headers', nginx, [
+  'Content-Security-Policy', "default-src 'self'", "script-src 'self'", "object-src 'none'", "frame-ancestors 'none'",
+  "connect-src 'self' https: wss:", 'Cross-Origin-Opener-Policy "same-origin"',
+  'proxy_set_header Authorization $http_authorization', 'proxy_set_header X-Real-IP $remote_addr',
+  'proxy_set_header X-Forwarded-For $remote_addr', 'expires 1y;', 'expires -1;',
+])
+if (nginx.includes('add_header Cache-Control')) fail('location Cache-Control add_header would break inherited server security headers')
+
 const caddy = await read('deploy', 'Caddyfile.example')
 requireAll('Caddyfile.example', caddy, [
   'reverse_proxy 127.0.0.1:8080',
   'Strict-Transport-Security',
+  'Content-Security-Policy',
+  'Cross-Origin-Opener-Policy',
   'max_size 1MB',
 ])
 
 const serverDay = await read('deploy', 'server-day.sh')
 requireAll('server-day.sh', serverDay, [
   'scripts/check-deployment-env.mjs',
-  'scripts/preflight.mjs',
+  'scripts/preflight-runtime.mjs',
+  'scripts/test-web-security.mjs',
   'scripts/test-operator-attempt-repository.mjs',
   'scripts/test-operator-attempt-client.mjs',
   'scripts/test-idempotency.mjs',
   'scripts/test-billing-foundation.mjs',
   'persistentAttemptJournal',
+  'Content-Security-Policy:',
   'docker compose --env-file',
   'externalSendEnabled',
   '127.0.0.1:8080',
@@ -128,7 +141,7 @@ requireAll('.env.example', envExample, [
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test']) {
+for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'attempt-repository:test', 'attempt-client:test', 'billing:test', 'web-security:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
 if (pkg.dependencies?.pg !== '8.23.0') fail('root pg dependency must stay pinned to 8.23.0')
@@ -140,4 +153,4 @@ for (const [section, dependencies] of Object.entries({ dependencies: pkg.depende
   }
 }
 
-console.log('Deploy preflight OK: explicit production mode, safe operator journal UI boundary, secrets/backups ignored, guarded checksum migrations, billing rollout, restricted persistent journal, loopback binding, private gateway, HTTPS template and encrypted recovery safeguards verified')
+console.log('Deploy preflight OK: explicit production mode, CSP/header inheritance, safe operator journal UI boundary, guarded checksum migrations, billing rollout, restricted persistent journal, loopback binding, private gateway, HTTPS edge and encrypted recovery safeguards verified')
