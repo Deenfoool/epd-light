@@ -20,6 +20,9 @@ requireAll('docker-compose.yml', compose, [
   '"127.0.0.1:8080:8080"',
   'EPD_EXTERNAL_RATE_LIMIT_MAX',
   'EPD_DATA_SUPABASE_PUBLIC_KEY',
+  'EPD_GATEWAY_DATABASE_URL',
+  'EPD_GATEWAY_DATABASE_ROLE',
+  'EPD_OPERATOR_ATTEMPT_STALE_MS',
   'EPD_KONTUR_ACCESS_TOKEN',
   'expose:',
   '- "8787"',
@@ -40,6 +43,7 @@ requireAll('server-day.sh', serverDay, [
   'scripts/check-deployment-env.mjs',
   'scripts/preflight.mjs',
   'scripts/test-idempotency.mjs',
+  'scripts/test-billing-foundation.mjs',
   'docker compose --env-file',
   'externalSendEnabled',
   '127.0.0.1:8080',
@@ -81,10 +85,33 @@ if (migrations.includes('-e EPD_DATABASE_URL="$DB_URL"') || migrations.includes(
   fail('migration runner must not place database URL in docker/psql argv')
 }
 
+const billingMigration = await read('supabase', 'migrations', '202609020001_billing_foundation.sql')
+requireAll('billing foundation migration', billingMigration, [
+  'create table if not exists public.billing_plans',
+  'create table if not exists public.subscriptions',
+  'create table if not exists public.billing_usage_monthly',
+  "values ('default', false, 14)",
+  'after insert on public.documents',
+  'grant select on public.subscriptions to authenticated',
+])
+
+const writerMigration = await read('supabase', 'migrations', '202609020002_gateway_writer_role.sql')
+requireAll('gateway writer migration', writerMigration, [
+  'create role epd_gateway_writer nologin noinherit',
+  'grant select, insert, update on public.operator_attempts to epd_gateway_writer',
+  'revoke delete on public.operator_attempts from epd_gateway_writer',
+  'operator_attempts_gateway_insert',
+  'operator_attempts_gateway_update',
+])
+if (/create\s+role\s+epd_gateway_writer\s+login/i.test(writerMigration)) fail('gateway capability role must remain NOLOGIN')
+
 const envExample = await read('.env.example')
 requireAll('.env.example', envExample, [
   'EPD_GATEWAY_AUTH_MODE=disabled',
   'EPD_DATA_SUPABASE_PUBLIC_KEY=',
+  'EPD_GATEWAY_DATABASE_URL=',
+  'EPD_GATEWAY_DATABASE_ROLE=epd_gateway_writer',
+  'EPD_OPERATOR_ATTEMPT_STALE_MS=300000',
   'EPD_EXTERNAL_RATE_LIMIT_MAX=10',
   'EPD_OPERATOR_MODE=sandbox',
   'EPD_KONTUR_ACCESS_TOKEN=',
@@ -95,13 +122,16 @@ requireAll('.env.example', envExample, [
 ])
 
 const pkg = JSON.parse(await read('package.json'))
-for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test']) {
+for (const script of ['deploy:server-day', 'db:migrate', 'backup:create', 'backup:verify', 'backup:restore:test', 'billing:test']) {
   if (!pkg.scripts?.[script]) fail(`package script missing: ${script}`)
 }
+if (pkg.dependencies?.pg !== '8.23.0') fail('root pg dependency must stay pinned to 8.23.0')
+const serverPkg = JSON.parse(await read('server', 'package.json'))
+if (serverPkg.dependencies?.pg !== '8.23.0') fail('gateway pg dependency must stay pinned to 8.23.0')
 for (const [section, dependencies] of Object.entries({ dependencies: pkg.dependencies || {}, devDependencies: pkg.devDependencies || {} })) {
   for (const [name, version] of Object.entries(dependencies)) {
     if (/^[~^*]|\s|\|\||>|</.test(String(version))) fail(`${section}.${name} must use a pinned direct version, found ${version}`)
   }
 }
 
-console.log('Deploy preflight OK: secrets/backups ignored, guarded checksum migrations, loopback binding, private gateway, HTTPS template, encrypted backup/restore safeguards and pinned dependencies verified')
+console.log('Deploy preflight OK: secrets/backups ignored, guarded checksum migrations, billing rollout, restricted persistent journal, loopback binding, private gateway, HTTPS template and encrypted recovery safeguards verified')
