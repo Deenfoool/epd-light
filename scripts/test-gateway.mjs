@@ -7,12 +7,16 @@ const child = spawn(process.execPath, ['server/index.mjs'], {
   env: {
     ...process.env,
     PORT: String(port),
+    EPD_DEPLOYMENT_MODE: 'local',
     EPD_OPERATOR_PROVIDER: 'none',
     EPD_OPERATOR_MODE: 'disabled',
     EPD_GATEWAY_AUTH_MODE: 'disabled',
     EPD_AUTH_SUPABASE_URL: '',
     EPD_DATA_SUPABASE_URL: '',
     EPD_DATA_SUPABASE_PUBLIC_KEY: '',
+    EPD_GATEWAY_DATABASE_URL: '',
+    EPD_BILLING_PROVIDER: 'none',
+    EPD_BILLING_DATABASE_URL: '',
     EPD_KONTUR_BOX_ID: '',
     EPD_KONTUR_ACCESS_TOKEN: '',
   },
@@ -41,6 +45,17 @@ const p = (id, phone) => ({ kind: 'org', name: 'ООО Тест', inn: '77000000
 
 try {
   await waitForHealth()
+
+  const billingCapabilitiesResponse = await fetch(`${base}/api/billing/capabilities`)
+  const billingCapabilities = await billingCapabilitiesResponse.json()
+  assert(billingCapabilitiesResponse.status === 200, 'billing capabilities status must be 200')
+  assert(billingCapabilities.provider === 'none', 'billing provider must remain none')
+  assert(billingCapabilities.checkoutEnabled === false, 'billing checkout must remain disabled')
+  assert(billingCapabilities.webhookEnabled === false, 'billing webhook must remain disabled')
+  assert(billingCapabilities.realMoneyEnabled === false, 'real money must remain disabled')
+  assert(billingCapabilities.successRedirectAuthoritative === false, 'success redirect must never prove payment')
+  assert(billingCapabilities.directRuntimeSubscriptionUpdateAllowed === false, 'billing runtime direct subscription update must be forbidden')
+  assert(billingCapabilities.entitlementDatabaseFunctionRequired === true, 'billing entitlement DB function must be required')
 
   const capabilitiesResponse = await fetch(`${base}/api/operator/capabilities`)
   const capabilities = await capabilitiesResponse.json()
@@ -105,10 +120,11 @@ try {
   for (const forbidden of ['Иванов Секретный Иванович', '+79991234567', 'СЕКРЕТ-ГРУЗ', '<LogisticsWaybillConsignorTitle']) {
     assert(!stdout.includes(forbidden), `gateway stdout leaked request/response payload data: ${forbidden}`)
   }
+  assert(stdout.includes('"path":"/api/billing/capabilities"'), 'billing capabilities route should be audited')
   assert(stdout.includes('"path":"/api/operator/preflight"'), 'preflight route should be audited')
   assert(stdout.includes('"errorCode":"operator_send_disabled"'), 'disabled send should expose only machine-safe audit code')
 
-  console.log('Gateway smoke test OK: isolated local auth, preview, disabled sandbox/send and payload-free audit verified')
+  console.log('Gateway smoke test OK: isolated local auth, fail-closed billing capabilities, preview, disabled sandbox/send and payload-free audit verified')
 } finally {
   child.kill('SIGTERM')
   await Promise.race([new Promise((resolve) => child.once('exit', resolve)), sleep(1000)])
