@@ -36,6 +36,7 @@ echo "== EPD Light server-day prechecks =="
 run_node scripts/check-deployment-env.mjs
 run_node scripts/check-billing-env.mjs
 run_node scripts/preflight-deploy.mjs
+run_node scripts/preflight-billing.mjs
 run_node scripts/preflight-runtime.mjs
 run_node scripts/preflight.mjs
 run_node scripts/test-deployment-env.mjs
@@ -49,6 +50,7 @@ run_node scripts/test-operator-attempt-client.mjs
 run_node scripts/test-idempotency.mjs
 run_node scripts/test-billing-foundation.mjs
 run_node scripts/test-billing-payment-boundary.mjs
+run_node scripts/test-billing-payment-client.mjs
 run_node scripts/test-rate-limit.mjs
 run_node scripts/test-gateway.mjs
 run_node scripts/test-kontur-userdata.mjs
