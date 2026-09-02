@@ -16,6 +16,7 @@
     "auth:test": "node scripts/test-auth.mjs",
     "authorization:test": "node scripts/test-authorization.mjs",
     "repository:test": "node scripts/test-supabase-repository.mjs",
+    "attempt-repository:test": "node scripts/test-operator-attempt-repository.mjs",
     "idempotency:test": "node scripts/test-idempotency.mjs",
     "billing:test": "node scripts/test-billing-foundation.mjs",
     "rate-limit:test": "node scripts/test-rate-limit.mjs",
